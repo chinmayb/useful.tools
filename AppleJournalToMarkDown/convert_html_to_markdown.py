@@ -341,7 +341,7 @@ def convert_file(html_path: Path, out_path: Path) -> None:
 
         src_path = (html_path.parent / src).resolve()
         try:
-            src_path.relative_to(ROOT)
+            src_path.relative_to(INPUT_DIR)
         except ValueError:
             continue
         if not src_path.exists() or not src_path.is_file():
@@ -372,7 +372,7 @@ def convert_file(html_path: Path, out_path: Path) -> None:
 
         src_path = (html_path.parent / src).resolve()
         try:
-            src_path.relative_to(ROOT)
+            src_path.relative_to(INPUT_DIR)
         except ValueError:
             continue
         if not src_path.exists() or not src_path.is_file():
