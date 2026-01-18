@@ -1,0 +1,12 @@
+services:
+  expense-tracker:
+    build: .
+    container_name: expense-tracker
+    restart: unless-stopped
+    env_file:
+      - config.env
+    environment:
+      - TZ=Asia/Kolkata
+      - CRON_SCHEDULE=*/5 * * * *
+    volumes:
+      - ./logs:/app/logs
