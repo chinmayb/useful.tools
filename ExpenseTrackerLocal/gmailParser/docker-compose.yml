@@ -7,6 +7,7 @@ services:
       - config.env
     environment:
       - TZ=Asia/Kolkata
-      - CRON_SCHEDULE=*/5 * * * *
+      - CRON_SCHEDULE=0 */4 * * *
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data

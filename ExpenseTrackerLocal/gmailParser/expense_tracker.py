@@ -12,8 +12,10 @@ import re
 import os
 import sys
 import logging
-from datetime import datetime
-from dataclasses import dataclass
+import hashlib
+from pathlib import Path
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field
 import requests
 
 logging.basicConfig(
@@ -24,6 +26,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def generate_transaction_id(amount: float, merchant: str, date: datetime, account_id: str, raw_text: str) -> str:
+    content = f"{amount:.2f}|{merchant}|{date.strftime('%Y-%m-%d')}|{account_id}|{raw_text[:200]}"
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+PROCESSED_HASHES_FILE = Path(os.getenv("PROCESSED_HASHES_FILE", "/app/data/processed_hashes.txt"))
+
+
+def load_processed_hashes() -> set[str]:
+    if not PROCESSED_HASHES_FILE.exists():
+        return set()
+    return set(PROCESSED_HASHES_FILE.read_text().strip().split("\n"))
+
+
+def save_processed_hash(transaction_id: str) -> None:
+    PROCESSED_HASHES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with PROCESSED_HASHES_FILE.open("a") as f:
+        f.write(f"{transaction_id}\n")
+
+
 @dataclass
 class Transaction:
     amount: float
@@ -32,6 +54,7 @@ class Transaction:
     account_id: str
     transaction_type: str
     raw_text: str
+    transaction_id: str = field(default="")
 
 
 ACCOUNT_IDS: dict[str, str] = {
@@ -57,7 +80,8 @@ WATCHED_SENDERS = [
 
 
 def get_email_body(msg: Message) -> str:
-    body = ""
+    text_body = ""
+    html_body = ""
 
     if msg.is_multipart():
         for part in msg.walk():
@@ -69,18 +93,15 @@ def get_email_body(msg: Message) -> str:
                     payload = part.get_payload(decode=True)
                     if isinstance(payload, bytes):
                         charset = part.get_content_charset() or "utf-8"
-                        body = payload.decode(charset, errors="replace")
-                        break
+                        text_body = payload.decode(charset, errors="replace")
                 except Exception as e:
                     logger.warning(f"Failed to decode part: {e}")
-            elif content_type == "text/html" and not body:
+            elif content_type == "text/html" and not html_body:
                 try:
                     payload = part.get_payload(decode=True)
                     if isinstance(payload, bytes):
                         charset = part.get_content_charset() or "utf-8"
                         html_body = payload.decode(charset, errors="replace")
-                        body = re.sub(r"<[^>]+>", " ", html_body)
-                        body = re.sub(r"\s+", " ", body).strip()
                 except Exception as e:
                     logger.warning(f"Failed to decode HTML part: {e}")
     else:
@@ -88,11 +109,26 @@ def get_email_body(msg: Message) -> str:
             payload = msg.get_payload(decode=True)
             if isinstance(payload, bytes):
                 charset = msg.get_content_charset() or "utf-8"
-                body = payload.decode(charset, errors="replace")
+                text_body = payload.decode(charset, errors="replace")
         except Exception as e:
             logger.warning(f"Failed to decode message: {e}")
 
-    return body
+    if text_body.strip():
+        return text_body
+
+    if html_body:
+        import html
+        prev = ""
+        content = html_body
+        while prev != content:
+            prev = content
+            content = html.unescape(content)
+        content = re.sub(r"<style[^>]*>.*?</style>", "", content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r"<[^>]+>", " ", content)
+        content = re.sub(r"\s+", " ", content).strip()
+        return content
+
+    return ""
 
 
 def parse_amount(amount_str: str) -> float:
@@ -191,6 +227,8 @@ def parse_hdfc_cc_debit(body: str) -> Transaction | None:
     Pattern 1: Rs.X is debited from your HDFC Bank Credit Card ending XXXX towards MERCHANT on DATE
     Pattern 2: Thank you for using HDFC Bank Card XXXXXX for Rs. X at MERCHANT on DD-MM-YYYY
     Pattern 3: Rs.X has been debited from your HDFC Bank RuPay Credit Card XXXXXX to MERCHANT on DD-MM-YY
+    Pattern 4: using your HDFC Bank Credit Card ending XXXX for Rs X at MERCHANT on DD-MM-YYYY HH:MM:SS
+    Pattern 5: Rs.X has been debited from your HDFC Bank RuPay Credit Card XXXX to UPI_ID MERCHANT on DD-MM-YY (UPI)
     """
     pattern1 = r"Rs\.?([\d,]+\.?\d*)\s+is debited from your HDFC Bank Credit Card ending\s+(\d{4})\s+towards\s+([^.]+?)\s+on\s+(\d{1,2}\s+\w+,?\s+\d{4})"
     match = re.search(pattern1, body, re.IGNORECASE)
@@ -202,8 +240,8 @@ def parse_hdfc_cc_debit(body: str) -> Transaction | None:
         date_str = match.group(4).strip().replace(",", "")
         date = try_parse_date(date_str, ["%d %b %Y", "%d %B %Y"])
     else:
-        pattern2 = r"HDFC Bank Card\s+\w*(\d{4})\s+for\s+Rs\.?\s*([\d,]+\.?\d*)\s+at\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{4})"
-        match = re.search(pattern2, body, re.IGNORECASE)
+        pattern4 = r"HDFC Bank Credit Card ending\s+(\d{4})\s+for\s+Rs\.?\s*([\d,]+\.?\d*)\s+at\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{4})"
+        match = re.search(pattern4, body, re.IGNORECASE)
         if match:
             last_four = match.group(1)
             amount = parse_amount(match.group(2))
@@ -211,16 +249,34 @@ def parse_hdfc_cc_debit(body: str) -> Transaction | None:
             date_str = match.group(4).strip()
             date = try_parse_date(date_str, ["%d-%m-%Y"])
         else:
-            pattern3 = r"Rs\.?([\d,]+\.?\d*)\s+has been debited from your HDFC Bank RuPay Credit Card\s+\w*(\d{4})\s+to\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{2})"
-            match = re.search(pattern3, body, re.IGNORECASE)
-            if not match:
-                return None
+            pattern2 = r"HDFC Bank Card\s+\w*(\d{4})\s+for\s+Rs\.?\s*([\d,]+\.?\d*)\s+at\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{4})"
+            match = re.search(pattern2, body, re.IGNORECASE)
+            if match:
+                last_four = match.group(1)
+                amount = parse_amount(match.group(2))
+                merchant = match.group(3).strip()
+                date_str = match.group(4).strip()
+                date = try_parse_date(date_str, ["%d-%m-%Y"])
+            else:
+                pattern5 = r"Rs\.?([\d,]+\.?\d*)\s+has been debited from your HDFC Bank RuPay Credit Card\s+\w*(\d{4})\s+to\s+\S+@\S+\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{2})"
+                match = re.search(pattern5, body, re.IGNORECASE)
+                if match:
+                    amount = parse_amount(match.group(1))
+                    last_four = match.group(2)
+                    merchant = match.group(3).strip()
+                    date_str = match.group(4).strip()
+                    date = try_parse_date(date_str, ["%d-%m-%y"])
+                else:
+                    pattern3 = r"Rs\.?([\d,]+\.?\d*)\s+has been debited from your HDFC Bank RuPay Credit Card\s+\w*(\d{4})\s+to\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{2})"
+                    match = re.search(pattern3, body, re.IGNORECASE)
+                    if not match:
+                        return None
 
-            amount = parse_amount(match.group(1))
-            last_four = match.group(2)
-            merchant = match.group(3).strip()
-            date_str = match.group(4).strip()
-            date = try_parse_date(date_str, ["%d-%m-%y"])
+                    amount = parse_amount(match.group(1))
+                    last_four = match.group(2)
+                    merchant = match.group(3).strip()
+                    date_str = match.group(4).strip()
+                    date = try_parse_date(date_str, ["%d-%m-%y"])
 
     account_key = f"hdfc_cc_{last_four}"
     account_id = ACCOUNT_IDS.get(account_key)
@@ -243,8 +299,9 @@ def parse_axis_bank_debit(body: str) -> Transaction | None:
     """
     Pattern 1: INR X spent/debited
     Pattern 2: INR X was debited from your A/c no. XX1817
+    Pattern 3: Amount Debited: INR X (new format)
     """
-    pattern = r"INR\s+([\d,]+\.?\d*)\s+(?:was\s+debited|spent|debited)"
+    pattern = r"(?:Amount\s+Debited:\s*)?INR\s+([\d,]+\.?\d*)\s*(?:was\s+debited|spent|debited)?"
     match = re.search(pattern, body, re.IGNORECASE)
     if not match:
         return None
@@ -422,18 +479,21 @@ def parse_email(sender: str, body: str) -> Transaction | None:
 
 
 def post_to_sure(transaction: Transaction, api_url: str, api_key: str) -> bool:
-    endpoint = f"{api_url}/api/transactions"
+    endpoint = f"{api_url}/api/v1/transactions"
 
     payload = {
-        "amount": transaction.amount,
-        "description": transaction.merchant,
-        "date": transaction.date.isoformat(),
-        "accountId": transaction.account_id,
-        "type": transaction.transaction_type,
+        "transaction": {
+            "amount": transaction.amount,
+            "name": transaction.merchant,
+            "date": transaction.date.strftime("%Y-%m-%d"),
+            "account_id": transaction.account_id,
+            "nature": transaction.transaction_type,
+            "notes": transaction.transaction_id,
+        }
     }
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "X-Api-Key": api_key,
         "Content-Type": "application/json",
     }
 
@@ -457,14 +517,37 @@ def connect_imap(host: str, email_addr: str, password: str) -> imaplib.IMAP4_SSL
     return mail
 
 
-def fetch_unread_emails(
-    mail: imaplib.IMAP4_SSL, folder: str = "INBOX"
+def fetch_emails_from_senders(
+    mail: imaplib.IMAP4_SSL, folder: str = "INBOX", max_emails: int = 0, since_date: str = "", read_all: bool = False
 ) -> list[tuple[str, str, str]]:
+    """
+    Fetch emails from watched senders.
+    
+    Args:
+        mail: IMAP connection
+        folder: Email folder to search in
+        max_emails: Maximum number of emails to fetch (0 = no limit)
+        since_date: Only fetch emails since this date (format: DD-Mon-YYYY, e.g., "01-Jan-2026")
+        read_all: If True, fetch both read and unread emails. If False, only unread.
+    """
     mail.select(folder)
     emails: list[tuple[str, str, str]] = []
 
     for sender in WATCHED_SENDERS:
-        search_criteria = f'(UNSEEN FROM "{sender}")'
+        if max_emails and len(emails) >= max_emails:
+            break
+
+        if read_all:
+            if since_date:
+                search_criteria = f'(FROM "{sender}" SINCE {since_date})'
+            else:
+                search_criteria = f'(FROM "{sender}")'
+        else:
+            if since_date:
+                search_criteria = f'(UNSEEN FROM "{sender}" SINCE {since_date})'
+            else:
+                search_criteria = f'(UNSEEN FROM "{sender}")'
+        
         status, messages = mail.search(None, search_criteria)
 
         if status != "OK" or not messages[0]:
@@ -472,6 +555,10 @@ def fetch_unread_emails(
 
         message_ids = messages[0].split()
         logger.info(f"Found {len(message_ids)} unread emails from {sender}")
+
+        if max_emails:
+            remaining = max_emails - len(emails)
+            message_ids = message_ids[:remaining]
 
         for msg_id in message_ids:
             try:
@@ -516,7 +603,15 @@ def main() -> None:
     sure_api_url = os.getenv("SURE_API_URL", "http://localhost:3001")
     sure_api_key = os.getenv("SURE_API_KEY")
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
-
+    max_emails = int(os.getenv("MAX_EMAILS", "0"))
+    start_date = os.getenv("START_DATE", "")
+    read_all_emails = os.getenv("READ_ALL_EMAILS", "true").lower() == "true"
+    
+    if not start_date:
+        one_month_ago = datetime.now() - timedelta(days=30)
+        start_date = one_month_ago.strftime("%d-%b-%Y")
+        logger.info(f"No START_DATE specified, using 1 month ago: {start_date}")
+    
     if not email_addr or not email_password:
         logger.error("EMAIL_ADDRESS and EMAIL_PASSWORD are required")
         sys.exit(1)
@@ -527,21 +622,42 @@ def main() -> None:
 
     logger.info("Starting expense tracker...")
     logger.info(f"Dry run mode: {dry_run}")
+    logger.info(f"Reading {'all' if read_all_emails else 'only unread'} emails from senders")
+    logger.info(f"Fetching emails since: {start_date}")
+    if max_emails:
+        logger.info(f"Max emails limit: {max_emails}")
 
     try:
         mail = connect_imap(imap_host, email_addr, email_password)
-        emails = fetch_unread_emails(mail)
+        emails = fetch_emails_from_senders(mail, max_emails=max_emails, since_date=start_date, read_all=read_all_emails)
         logger.info(f"Processing {len(emails)} emails...")
 
+        processed_hashes = load_processed_hashes()
         processed = 0
         failed = 0
+        skipped = 0
+        duplicates = 0
 
         for msg_id, sender, body in emails:
             transaction = parse_email(sender, body)
 
             if transaction:
+                transaction.transaction_id = generate_transaction_id(
+                    transaction.amount,
+                    transaction.merchant,
+                    transaction.date,
+                    transaction.account_id,
+                    transaction.raw_text,
+                )
+
+                if transaction.transaction_id in processed_hashes:
+                    logger.info(f"Duplicate [{transaction.transaction_id}], skipping")
+                    mark_as_read(mail, msg_id)
+                    duplicates += 1
+                    continue
+
                 logger.info(
-                    f"Parsed: {transaction.amount} - {transaction.merchant} ({transaction.date})"
+                    f"Parsed [{transaction.transaction_id}]: {transaction.amount} - {transaction.merchant} ({transaction.date})"
                 )
 
                 if dry_run:
@@ -553,18 +669,22 @@ def main() -> None:
                     success = False
 
                 if success:
+                    save_processed_hash(transaction.transaction_id)
+                    processed_hashes.add(transaction.transaction_id)
                     mark_as_read(mail, msg_id)
                     processed += 1
                 else:
+                    logger.warning(f"API call failed for {msg_id}, keeping unread for retry on next run")
                     failed += 1
             else:
+                logger.info(f"Unparseable email from {sender}, marking as read to prevent infinite retry")
                 mark_as_read(mail, msg_id)
-                logger.debug(f"Could not parse email from {sender}")
+                skipped += 1
 
         mail.close()
         mail.logout()
 
-        logger.info(f"Done! Processed: {processed}, Failed: {failed}")
+        logger.info(f"Done! Processed: {processed}, Failed: {failed}, Duplicates: {duplicates}, Skipped (unparseable): {skipped}")
 
     except Exception as e:
         logger.error(f"Fatal error: {e}")

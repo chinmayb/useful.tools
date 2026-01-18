@@ -127,6 +127,9 @@ docker compose down
 | `SURE_API_URL` | No | `http://localhost:3001` | API URL |
 | `IMAP_HOST` | No | `imap.gmail.com` | IMAP server |
 | `DRY_RUN` | No | `false` | Test mode (no API calls) |
+| `READ_ALL_EMAILS` | No | `true` | Read all emails from senders (both read and unread) |
+| `START_DATE` | No | 30 days ago | Only process emails from this date onwards (format: DD-Mon-YYYY) |
+| `MAX_EMAILS` | No | `0` | Limit number of emails to process (0 = no limit) |
 | `CRON_SCHEDULE` | No | `*/5 * * * *` | Docker cron schedule |
 
 ### Account ID Variables
@@ -148,11 +151,12 @@ You need to set account IDs for each bank/card you want to track:
 ## How It Works
 
 1. Connects to Gmail via IMAP
-2. Fetches unread emails from watched senders
+2. Fetches emails from watched senders (by default, reads both read and unread emails from the last 30 days)
 3. Parses transaction details (amount, merchant, date)
-4. Posts to finance API
-5. Marks email as read
-6. Runs every 5 minutes via cron (in Docker)
+4. Checks for duplicates using transaction hash (ensures no duplicate entries even if processing the same email multiple times)
+5. Posts to finance API if not a duplicate
+6. Marks email as read
+7. Runs every 5 minutes via cron (in Docker)
 
 ## Troubleshooting
 
@@ -172,9 +176,10 @@ You need to set account IDs for each bank/card you want to track:
 - Check for 2FA issues
 
 ### Emails not being processed
-- Ensure emails are UNREAD
+- If `READ_ALL_EMAILS=false`, ensure emails are UNREAD
 - Check sender is in `WATCHED_SENDERS` list
 - Verify email format matches patterns
+- Check `START_DATE` setting - emails older than this date won't be processed
 
 ## Files
 

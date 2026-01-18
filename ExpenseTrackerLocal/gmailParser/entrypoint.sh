@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-CRON_SCHEDULE="${CRON_SCHEDULE:-*/5 * * * *}"
+CRON_SCHEDULE="${CRON_SCHEDULE:-0 */4 * * *}"
 
 printenv | grep -E '^(IMAP_|EMAIL_|SURE_|DRY_|HDFC_|AXIS_|ICICI_|ZERODHA_)' > /app/env.sh
 sed -i 's/^/export /' /app/env.sh
