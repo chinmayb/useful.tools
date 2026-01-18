@@ -109,6 +109,47 @@ def try_parse_date(date_str: str, formats: list[str]) -> datetime:
     return datetime.now()
 
 
+def detect_transaction_type(body: str) -> str:
+    """Detect transaction type from email body keywords."""
+    body_lower = body.lower()
+    
+    income_keywords = [
+        "credited",
+        "received",
+        "refund",
+        "cashback",
+        "reversal",
+        "credit alert",
+        "amount credited",
+        "has been credited",
+        "salary",
+        "dividend",
+    ]
+    
+    expense_keywords = [
+        "debited",
+        "spent",
+        "debit alert",
+        "payment of",
+        "purchase",
+        "withdrawn",
+        "paid to",
+        "transaction of inr",
+        "has been used for",
+    ]
+    
+    for keyword in income_keywords:
+        if keyword in body_lower:
+            if f"not {keyword}" not in body_lower and f"failed to {keyword}" not in body_lower:
+                return "income"
+    
+    for keyword in expense_keywords:
+        if keyword in body_lower:
+            return "expense"
+    
+    return "expense"
+
+
 def parse_hdfc_bank_debit(body: str) -> Transaction | None:
     """Pattern: Rs.X has been debited from HDFC Bank Account"""
     pattern = r"Rs\.?([\d,]+\.?\d*)\s+has been debited from (?:your )?HDFC Bank Account"
@@ -130,12 +171,17 @@ def parse_hdfc_bank_debit(body: str) -> Transaction | None:
             date_match.group(1), ["%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y"]
         )
 
+    account_id = ACCOUNT_IDS["hdfc_savings"]
+    if not account_id:
+        logger.warning("HDFC_SAVINGS_ID not configured, skipping.")
+        return None
+
     return Transaction(
         amount=amount,
         merchant=merchant,
         date=date,
-        account_id=ACCOUNT_IDS["hdfc_savings"],
-        transaction_type="expense",
+        account_id=account_id,
+        transaction_type=detect_transaction_type(body),
         raw_text=body[:500],
     )
 
@@ -177,14 +223,18 @@ def parse_hdfc_cc_debit(body: str) -> Transaction | None:
             date = try_parse_date(date_str, ["%d-%m-%y"])
 
     account_key = f"hdfc_cc_{last_four}"
-    account_id = ACCOUNT_IDS.get(account_key) or ACCOUNT_IDS["hdfc_cc_3114"]
+    account_id = ACCOUNT_IDS.get(account_key)
+    
+    if not account_id:
+        logger.warning(f"Unknown HDFC card ending {last_four}, skipping. Add HDFC_CC_{last_four}_ID to config.")
+        return None
 
     return Transaction(
         amount=amount,
         merchant=merchant,
         date=date,
         account_id=account_id,
-        transaction_type="expense",
+        transaction_type=detect_transaction_type(body),
         raw_text=body[:500],
     )
 
@@ -223,12 +273,17 @@ def parse_axis_bank_debit(body: str) -> Transaction | None:
                 date_match.group(1), ["%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y"]
             )
 
+    account_id = ACCOUNT_IDS["axis_savings"]
+    if not account_id:
+        logger.warning("AXIS_SAVINGS_ID not configured, skipping.")
+        return None
+
     return Transaction(
         amount=amount,
         merchant=merchant,
         date=date,
-        account_id=ACCOUNT_IDS["axis_savings"],
-        transaction_type="expense",
+        account_id=account_id,
+        transaction_type=detect_transaction_type(body),
         raw_text=body[:500],
     )
 
@@ -246,7 +301,11 @@ def parse_icici_cc_debit(body: str) -> Transaction | None:
     merchant = match.group(4).strip()
 
     account_key = f"icici_cc_{last_four}"
-    account_id = ACCOUNT_IDS.get(account_key) or ACCOUNT_IDS["icici_cc_0018"]
+    account_id = ACCOUNT_IDS.get(account_key)
+    
+    if not account_id:
+        logger.warning(f"Unknown ICICI card ending {last_four}, skipping. Add ICICI_CC_{last_four}_ID to config.")
+        return None
 
     date = try_parse_date(date_str, ["%b %d %Y", "%B %d %Y"])
 
@@ -255,7 +314,7 @@ def parse_icici_cc_debit(body: str) -> Transaction | None:
         merchant=merchant,
         date=date,
         account_id=account_id,
-        transaction_type="expense",
+        transaction_type=detect_transaction_type(body),
         raw_text=body[:500],
     )
 
@@ -280,12 +339,17 @@ def parse_hdfc_nach_debit(body: str) -> Transaction | None:
             date_match.group(1), ["%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y"]
         )
 
+    account_id = ACCOUNT_IDS["zerodha_kite"]
+    if not account_id:
+        logger.warning("ZERODHA_KITE_ID not configured, skipping.")
+        return None
+
     return Transaction(
         amount=amount,
         merchant=merchant,
         date=date,
-        account_id=ACCOUNT_IDS["zerodha_kite"],
-        transaction_type="expense",
+        account_id=account_id,
+        transaction_type=detect_transaction_type(body),
         raw_text=body[:500],
     )
 
@@ -301,7 +365,6 @@ def parse_vested(body: str) -> Transaction | None:
     if match:
         amount = parse_amount(match.group(1))
         stock_name = match.group(2).strip()
-        txn_type = "income"
         merchant = f"Dividend: {stock_name}"
         
         date = datetime.now()
@@ -316,7 +379,6 @@ def parse_vested(body: str) -> Transaction | None:
         
         stock_name = match.group(1).strip()
         amount = parse_amount(match.group(2))
-        txn_type = "expense"
         merchant = f"Buy: {stock_name}"
         
         date = datetime.now()
@@ -324,12 +386,17 @@ def parse_vested(body: str) -> Transaction | None:
         if date_match:
             date = try_parse_date(date_match.group(1), ["%d/%m/%Y", "%m/%d/%Y"])
 
+    account_id = ACCOUNT_IDS["vested"]
+    if not account_id:
+        logger.warning("VESTED_ID not configured, skipping.")
+        return None
+
     return Transaction(
         amount=amount,
         merchant=merchant,
         date=date,
-        account_id=ACCOUNT_IDS["vested"],
-        transaction_type=txn_type,
+        account_id=account_id,
+        transaction_type=detect_transaction_type(body),
         raw_text=body[:500],
     )
 
@@ -446,7 +513,7 @@ def main() -> None:
     imap_host = os.getenv("IMAP_HOST", "imap.gmail.com")
     email_addr = os.getenv("EMAIL_ADDRESS")
     email_password = os.getenv("EMAIL_PASSWORD")
-    sure_api_url = os.getenv("SURE_API_URL", "http://192.168.0.9:3001")
+    sure_api_url = os.getenv("SURE_API_URL", "http://localhost:3001")
     sure_api_key = os.getenv("SURE_API_KEY")
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
 

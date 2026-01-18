@@ -17,14 +17,14 @@ Rs.{amount} has been debited from HDFC Bank Account
 
 ### Example
 ```
-Rs.15000.00 has been debited from HDFC Bank Account Number XXXXXXXXXX4551
+Rs.15000.00 has been debited from HDFC Bank Account Number XXXXXXXXXXNNNN
 ```
 
 ### Extracted Fields
 | Field | Regex | Example |
 |-------|-------|---------|
 | Amount | `Rs\.?([\d,]+\.?\d*)` | 15000.00 |
-| Merchant | `towards\s+([^.]+)` | ZERODHA BROKING LTD |
+| Merchant | `towards\s+([^.]+)` | MERCHANT NAME |
 | Date | `on\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})` | 13-01-2026 |
 
 ---
@@ -40,7 +40,7 @@ Rs.{amount} is debited from your HDFC Bank Credit Card ending {last4} towards {m
 
 ### Example 1
 ```
-Rs.3181.12 is debited from your HDFC Bank Credit Card ending 3114 towards Agoda Company PTE LTD on 08 Jan, 2026 at 10:22:58
+Rs.3181.12 is debited from your HDFC Bank Credit Card ending XXXX towards Merchant Name on 08 Jan, 2026 at 10:22:58
 ```
 
 ### Pattern 2 (Thank you notification)
@@ -50,7 +50,17 @@ Thank you for using HDFC Bank Card XX{last4} for Rs. {amount} at {merchant} on {
 
 ### Example 2
 ```
-Thank you for using HDFC Bank Card XX3114 for Rs. 299.0 at YOUTUBEGOOGLE on 15-01-2026 21:45:58
+Thank you for using HDFC Bank Card XXXXXX for Rs. 299.0 at MERCHANT on 15-01-2026 21:45:58
+```
+
+### Pattern 3 (RuPay Credit Card)
+```
+Rs.{amount} has been debited from your HDFC Bank RuPay Credit Card XX{last4} to {merchant} on {date}
+```
+
+### Example 3
+```
+Rs.40.00 has been debited from your HDFC Bank RuPay Credit Card XXXXXX to merchant@upi on 18-01-26
 ```
 
 ### Extracted Fields
@@ -62,10 +72,9 @@ Thank you for using HDFC Bank Card XX3114 for Rs. 299.0 at YOUTUBEGOOGLE on 15-0
 | Date | `on\s+(\d{1,2}\s+\w+,?\s+\d{4})` | `on\s+(\d{2}-\d{2}-\d{4})` |
 
 ### Card Mapping
-| Last 4 | Card | Account ID |
-|--------|------|------------|
-| 3114 | HDFC Infinia | `e16a880d-be99-4c41-ab8e-54287d2291d0` |
-| TBD | HDFC Rupay | `f142a58b-280c-407a-b205-0ac9290fc13b` |
+Cards are mapped by last 4 digits to account IDs via environment variables:
+- `HDFC_INFINIA_CC_ID` - Maps to `hdfc_cc_XXXX`
+- `HDFC_RUPAY_CC_ID` - Maps to `hdfc_cc_XXXX`
 
 ---
 
@@ -80,7 +89,7 @@ INR {amount} spent/debited
 
 ### Pattern 2 (Detailed)
 ```
-INR {amount} was debited from your A/c no. XX{last4}
+INR {amount} was debited from your A/c no. XXXXXX
 ...
 Transaction Info:
 UPI/P2M/{ref}/{merchant}
@@ -88,19 +97,19 @@ UPI/P2M/{ref}/{merchant}
 
 ### Example 2
 ```
-INR 85.00 was debited from your A/c no. XX1817.
+INR 85.00 was debited from your A/c no. XXXXXX.
 
 Amount Debited:
 INR 85.00
 
 Account Number:
-XX1817
+XXXXXX
 
 Date & Time:
 18-01-26, 11:52:17 IST
 
 Transaction Info:
-UPI/P2M/601843139240/K VENKATESH
+UPI/P2M/601843139240/MERCHANT NAME
 ```
 
 ### Extracted Fields
@@ -123,7 +132,7 @@ Credit Card XX{last4} has been used for a transaction of INR {amount} on {date}.
 
 ### Example
 ```
-Your ICICI Bank Credit Card XX0018 has been used for a transaction of INR 16,495.00 on Jan 18, 2026 at 11:38:41. Info: AMAZON PAY IN E COMMERCE.
+Your ICICI Bank Credit Card XXXXXX has been used for a transaction of INR 16,495.00 on Jan 18, 2026 at 11:38:41. Info: MERCHANT NAME.
 ```
 
 ### Extracted Fields
@@ -135,69 +144,27 @@ Your ICICI Bank Credit Card XX0018 has been used for a transaction of INR 16,495
 | Merchant | `Info:\s*([^.]+)` |
 
 ### Card Mapping
-| Last 4 | Card | Account ID |
-|--------|------|------------|
-| 0018 | ICICI Amazon | `fdcc2636-6b28-4df5-a998-2f38820f3a74` |
+Cards are mapped by last 4 digits via `ICICI_AMAZON_CC_ID` environment variable.
 
 ---
 
-## HDFC NACH (Zerodha)
+## HDFC NACH (Investments)
 
 **Sender:** `nachautoemailer@hdfcbank.net`
 
 ### Pattern
 ```
-Rs.{amount} has been debited from HDFC Bank Account...towards ZERODHA
+Rs.{amount} has been debited from HDFC Bank Account...towards {merchant}
 ```
 
 ### Example
 ```
-Rs.15000.00 has been debited from HDFC Bank Account Number XXXXXXXXXX4551 towards ZERODHA BROKING LTD/ZJ0604
+Rs.15000.00 has been debited from HDFC Bank Account Number XXXXXXXXXXNNNN towards ZERODHA BROKING LTD/XXXXXX
 ```
 
 ### Behavior
-- If merchant contains "ZERODHA" → Log to Zerodha Kite account
+- If merchant contains "ZERODHA" → Log to Zerodha account (via `ZERODHA_KITE_ID`)
 - Otherwise → Treat as regular HDFC savings debit
-
----
-
-## Not Tracked
-
-| Source | Sender | Reason |
-|--------|--------|--------|
-| CDSL Demat | `services@cdslindia.co.in` | Units only, no rupee amount. Money already tracked via NACH. |
-| Zerodha Coin SIP | TBD | Covered by NACH debit |
-
----
-
-## Account ID Reference
-
-| Account | ID |
-|---------|-----|
-| HDFC Savings | `fdecba37-33b5-45cf-bc82-3fc1df875d02` |
-| Axis Savings | `85f3400d-db52-4300-8a19-fdfaf2385e7d` |
-| HDFC Infinia CC (3114) | `e16a880d-be99-4c41-ab8e-54287d2291d0` |
-| HDFC Rupay CC | `f142a58b-280c-407a-b205-0ac9290fc13b` |
-| Axis Rewards CC | `dbbb79c2-e381-4c88-8c2b-d68073959a3d` |
-| ICICI Amazon CC (0018) | `fdcc2636-6b28-4df5-a998-2f38820f3a74` |
-| Zerodha Coin | `6ebd2d4f-a105-4225-839f-d4d7f781f16e` |
-| Zerodha Kite | `07699932-dddf-45a0-995e-ec736faabde2` |
-
-### Pattern 3 (RuPay Credit Card)
-```
-Rs.{amount} has been debited from your HDFC Bank RuPay Credit Card XX{last4} to {merchant} on {date}
-```
-
-### Example 3
-```
-Rs.40.00 has been debited from your HDFC Bank RuPay Credit Card XX2398 to paytm.s1faoa0@pty DAIVIK HANUMANTHARAJU JAGADISH on 18-01-26
-```
-
-### Updated Card Mapping
-| Last 4 | Card | Account ID |
-|--------|------|------------|
-| 3114 | HDFC Infinia | `e16a880d-be99-4c41-ab8e-54287d2291d0` |
-| 2398 | HDFC Rupay | `f142a58b-280c-407a-b205-0ac9290fc13b` |
 
 ---
 
@@ -214,10 +181,10 @@ You have received a ${amount} dividend payout...for your investment in {stock}
 
 ### Example 1
 ```
-You have received a $0.25 dividend payout ($1.2/share) for your investment in Intuit Inc.(INTU).
+You have received a $0.25 dividend payout ($1.2/share) for your investment in Stock Name (TICKER).
 
 Dividend Details:
-Stock/ETF Name: Intuit Inc.(INTU)
+Stock/ETF Name: Stock Name (TICKER)
 Dividend Amount: $0.25
 Payout Date: 16/1/2026
 ```
@@ -229,10 +196,10 @@ Your buy order for {stock} for ${amount} has been successfully completed
 
 ### Example 2
 ```
-Your buy order for Moat for $1,000 has been successfully completed.
+Your buy order for Stock Name for $1,000 has been successfully completed.
 
 You can view the details of this transaction below:
-Name of Vest: Moat
+Name of Vest: Stock Name
 Amount: $1,000
 Transaction Date: 07:02 pm 21/10/2025 IST
 ```
@@ -247,5 +214,25 @@ Transaction Date: 07:02 pm 21/10/2025 IST
 ### Transaction Types
 | Pattern | Type | Merchant Format |
 |---------|------|-----------------|
-| Dividend | income | `Dividend: Intuit Inc.(INTU)` |
-| Buy Order | expense | `Buy: Moat` |
+| Dividend | income | `Dividend: Stock Name` |
+| Buy Order | expense | `Buy: Stock Name` |
+
+---
+
+## Not Tracked
+
+| Source | Sender | Reason |
+|--------|--------|--------|
+| CDSL Demat | `services@cdslindia.co.in` | Units only, no rupee amount. Money already tracked via NACH. |
+
+---
+
+## Adding New Patterns
+
+1. Collect sample emails from the new source
+2. Identify the regex patterns for amount, merchant, date
+3. Add sender to `WATCHED_SENDERS` in `expense_tracker.py`
+4. Create a new `parse_xxx()` function
+5. Add routing logic in `parse_email()`
+6. Add environment variable for account ID
+7. Test with `DRY_RUN=true`
