@@ -3,7 +3,7 @@ set -e
 
 CRON_SCHEDULE="${CRON_SCHEDULE:-0 */4 * * *}"
 
-printenv | grep -E '^(IMAP_|EMAIL_|SURE_|DRY_|HDFC_|AXIS_|ICICI_|ZERODHA_)' > /app/env.sh
+printenv | grep -E '^(IMAP_|EMAIL_|SURE_|DRY_|READ_ALL_|START_|MAX_|HDFC_|AXIS_|ICICI_|ZERODHA_|VESTED_|PROCESSED_)' > /app/env.sh
 sed -i 's/^/export /' /app/env.sh
 
 echo "$CRON_SCHEDULE /bin/bash -c 'source /app/env.sh && cd /app && python expense_tracker.py >> /app/logs/cron.log 2>&1'" > /etc/cron.d/expense-tracker
