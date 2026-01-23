@@ -537,18 +537,16 @@ def fetch_emails_from_senders(
         if max_emails and len(emails) >= max_emails:
             break
 
-        if read_all:
-            if since_date:
-                search_criteria = f'(FROM "{sender}" SINCE {since_date})'
-            else:
-                search_criteria = f'(FROM "{sender}")'
-        else:
-            if since_date:
-                search_criteria = f'(UNSEEN FROM "{sender}" SINCE {since_date})'
-            else:
-                search_criteria = f'(UNSEEN FROM "{sender}")'
+        search_parts = []
+        if not read_all:
+            search_parts.append("UNSEEN")
+        search_parts.append("FROM")
+        search_parts.append(f'"{sender}"')
+        if since_date:
+            search_parts.append("SINCE")
+            search_parts.append(since_date)
         
-        status, messages = mail.search(None, search_criteria)
+        status, messages = mail.search(None, *search_parts)
 
         if status != "OK" or not messages[0]:
             continue
