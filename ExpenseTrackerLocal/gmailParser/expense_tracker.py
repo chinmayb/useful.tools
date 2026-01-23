@@ -57,17 +57,32 @@ class Transaction:
     transaction_id: str = field(default="")
 
 
-ACCOUNT_IDS: dict[str, str] = {
-    "hdfc_savings": os.getenv("HDFC_SAVINGS_ID", ""),
-    "axis_savings": os.getenv("AXIS_SAVINGS_ID", ""),
-    "hdfc_cc_3114": os.getenv("HDFC_INFINIA_CC_ID", ""),
-    "hdfc_cc_2398": os.getenv("HDFC_RUPAY_CC_ID", ""),
-    "axis_cc_0022": os.getenv("AXIS_REWARDS_CC_ID", ""),
-    "icici_cc_0018": os.getenv("ICICI_AMAZON_CC_ID", ""),
-    "zerodha_coin": os.getenv("ZERODHA_COIN_ID", ""),
-    "zerodha_kite": os.getenv("ZERODHA_KITE_ID", ""),
-    "vested": os.getenv("VESTED_ID", ""),
-}
+def get_account_ids() -> dict[str, str]:
+    accounts = {
+        "hdfc_savings": os.getenv("HDFC_SAVINGS_ID", ""),
+        "axis_savings": os.getenv("AXIS_SAVINGS_ID", ""),
+        "zerodha_coin": os.getenv("ZERODHA_COIN_ID", ""),
+        "zerodha_kite": os.getenv("ZERODHA_KITE_ID", ""),
+        "vested": os.getenv("VESTED_ID", ""),
+    }
+    
+    for key, value in os.environ.items():
+        if key.endswith("_ID") and key.count("_") >= 3:
+            parts = key.rsplit("_", 2)
+            if len(parts[0].split("_")) >= 2:
+                bank_and_name = parts[0].lower()
+                last4 = parts[1].lower()
+                
+                if bank_and_name.startswith("hdfc_") and last4.isdigit():
+                    accounts[f"hdfc_cc_{last4}"] = value
+                elif bank_and_name.startswith("axis_") and last4.isdigit():
+                    accounts[f"axis_cc_{last4}"] = value
+                elif bank_and_name.startswith("icici_") and last4.isdigit():
+                    accounts[f"icici_cc_{last4}"] = value
+    
+    return accounts
+
+ACCOUNT_IDS: dict[str, str] = get_account_ids()
 
 WATCHED_SENDERS = [
     "alerts@hdfcbank.net",
@@ -295,6 +310,60 @@ def parse_hdfc_cc_debit(body: str) -> Transaction | None:
     )
 
 
+def parse_axis_cc_debit(body: str) -> Transaction | None:
+    pattern = r"Transaction\s+Amount[:\s]+INR\s+([\d,]+\.?\d*)"
+    match = re.search(pattern, body, re.IGNORECASE)
+    if not match:
+        return None
+
+    amount = parse_amount(match.group(1))
+
+    merchant = "Axis CC Transaction"
+    merchant_match = re.search(r"Merchant\s+Name[:\s]+([^<\n]+)", body, re.IGNORECASE)
+    if merchant_match:
+        merchant = merchant_match.group(1).strip()[:100]
+    else:
+        info_match = re.search(r"Transaction\s+Info[:\s]+([^<\n]+)", body, re.IGNORECASE)
+        if info_match:
+            merchant = info_match.group(1).strip()[:100]
+
+    date = datetime.now()
+    date_match = re.search(r"Transaction\s+Date[:\s]+(\d{2}-\d{2}-\d{4})", body, re.IGNORECASE)
+    if date_match:
+        date = try_parse_date(date_match.group(1), ["%d-%m-%Y"])
+    else:
+        date_match = re.search(r"(\d{2}-\d{2}-\d{2}),?\s+\d{2}:\d{2}:\d{2}", body)
+        if date_match:
+            date = try_parse_date(date_match.group(1), ["%d-%m-%y"])
+
+    card_match = re.search(r"Card\s+ending\s+(?:with\s+)?(\d{4})", body, re.IGNORECASE)
+    if not card_match:
+        card_match = re.search(r"Credit\s+Card\s+\w*(\d{4})", body, re.IGNORECASE)
+    
+    if card_match:
+        last_four = card_match.group(1)
+        account_key = f"axis_cc_{last_four}"
+        account_id = ACCOUNT_IDS.get(account_key)
+        
+        if not account_id:
+            logger.warning(f"Unknown Axis card ending {last_four}, skipping. Add AXIS_CC_{last_four}_ID to config.")
+            return None
+    else:
+        account_id = ACCOUNT_IDS.get("axis_cc_0022")
+        if not account_id:
+            logger.warning("AXIS_REWARDS_CC_ID not configured, skipping.")
+            return None
+
+    return Transaction(
+        amount=amount,
+        merchant=merchant,
+        date=date,
+        account_id=account_id,
+        transaction_type=detect_transaction_type(body),
+        raw_text=body[:500],
+    )
+
+
 def parse_axis_bank_debit(body: str) -> Transaction | None:
     """
     Pattern 1: INR X spent/debited
@@ -469,7 +538,10 @@ def parse_email(sender: str, body: str) -> Transaction | None:
         else:
             return parse_hdfc_bank_debit(body)
     elif "axisbank" in sender_lower or "axis.bank" in sender_lower:
-        return parse_axis_bank_debit(body)
+        if "Credit Card" in body or "Transaction Amount" in body:
+            return parse_axis_cc_debit(body)
+        else:
+            return parse_axis_bank_debit(body)
     elif "icicibank" in sender_lower:
         return parse_icici_cc_debit(body)
     elif "vestedfinance" in sender_lower:
