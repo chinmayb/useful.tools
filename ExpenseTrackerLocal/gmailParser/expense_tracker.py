@@ -540,13 +540,12 @@ def fetch_emails_from_senders(
         search_parts = []
         if not read_all:
             search_parts.append("UNSEEN")
-        search_parts.append("FROM")
-        search_parts.append(f'"{sender}"')
+        search_parts.append(f'FROM "{sender}"')
         if since_date:
-            search_parts.append("SINCE")
-            search_parts.append(since_date)
+            search_parts.append(f"SINCE {since_date}")
         
-        status, messages = mail.search(None, *search_parts)
+        search_criteria = " ".join(search_parts)
+        status, messages = mail.search(None, search_criteria)
 
         if status != "OK" or not messages[0]:
             continue
