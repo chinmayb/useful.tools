@@ -235,6 +235,23 @@ def extract_record(pp: dict, isin: str, scorecard: list[dict] | None = None) -> 
     if scorecard is None:
         scorecard = pp.get("scorecard") or []
 
+    # holdingsGraph carries per-stock top-N + sector breakdown.
+    # sectorDistribution is a time series; take the most recent month.
+    hg = pp.get("holdingsGraph") or {}
+    sector_series = hg.get("sectorDistribution") or []
+    latest_sectors = []
+    if isinstance(sector_series, list) and sector_series:
+        latest = max(sector_series, key=lambda x: x.get("date", 0))
+        latest_sectors = latest.get("holdings") or []
+        sectors_as_of_ms = latest.get("date")
+    else:
+        sectors_as_of_ms = None
+    sectors_as_of = (
+        datetime.fromtimestamp(sectors_as_of_ms / 1000, tz=timezone.utc).date().isoformat()
+        if sectors_as_of_ms else None
+    )
+    current_alloc = hg.get("currentAllocation") or []
+
     exit_load = _kv_lookup_full(scheme_info, "backL", "exitLoad") or {}
 
     return {
@@ -287,6 +304,22 @@ def extract_record(pp: dict, isin: str, scorecard: list[dict] | None = None) -> 
                 "value_pct": c.get("value"),
             }
             for c in (ss.get("cagrSeries") or [])
+        ],
+        "sectors_as_of": sectors_as_of,
+        "sector_weights": [
+            {"sector": s.get("sector"), "weight_pct": s.get("value")}
+            for s in latest_sectors
+        ],
+        "top_holdings": [
+            {
+                "ticker": h.get("ticker"),
+                "sid": h.get("sid"),
+                "name": h.get("title"),
+                "type": h.get("type"),
+                "weight_pct": h.get("latest"),
+                "weight_change_3m": h.get("change3m"),
+            }
+            for h in current_alloc
         ],
         "scraped_at": datetime.now(tz=timezone.utc).isoformat(),
         "source": "tickertape",
