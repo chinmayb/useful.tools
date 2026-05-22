@@ -1,0 +1,6 @@
+isin,folio,purchase_date
+# Fill in the date you started this folio. For SIPs, use the earliest installment
+# (conservative — biases toward LTCG, which means LOWER tax). Format: YYYY-MM-DD.
+# Lines starting with '#' are ignored. Save this file as
+# data/holdings/<latest>/lot_dates.csv (without the .template suffix).
+INF879O01027,18372150,2019-04-01
