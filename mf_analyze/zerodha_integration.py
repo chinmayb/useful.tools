@@ -176,7 +176,7 @@ if __name__ == "__main__":
             print(f"Current Value: ₹{summary['current_value']:,.2f}")
             print(f"Total P&L: ₹{summary['total_pnl']:,.2f}")
             print(f"Overall Return: {summary['overall_return_pct']:.2f}%")
-            print(f"Number of Funds: {summry['number_of_funds']}")
+            print(f"Number of Funds: {summary['number_of_funds']}")
             
             # Export data
             zerodha.export_to_csv()
