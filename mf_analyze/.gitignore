@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Generated data — regenerable from AMFI / mfapi.in / niftyindices
+# Also: data/holdings/ contains personal portfolio snapshots — never commit
+data/
+!data/.gitkeep
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Excel/CSV exports from analysis runs
+mf_portfolio_analysis_*.xlsx
+zerodha_mf_holdings*.csv
+portfolio_data*.csv
+
+# OS junk
+.DS_Store
+Thumbs.db
