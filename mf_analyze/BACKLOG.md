@@ -43,6 +43,12 @@ Re-enable only if v1's 6 metrics fail to discriminate between funds.
 - **Streamlit/Plotly dashboard** — alternative to the notebook for repeated use.
 - **Email/Slack digest** — scheduled summary on portfolio changes.
 - **PDF investor report** — exportable, shareable version of the notebook.
+- **`notebook-section-writer`** — was M4.9 in original plan. Skipped because `portfolio-health-check`'s markdown report turned out sufficient for the consolidation decision. Revisit if interactive charting (sector pie, drawdown curve, correlation heatmap) or parameter sweeps (different risk-free rate, different lookback) become a real need.
+
+## Deferred skills (originally planned, dropped after re-scoping)
+
+- **`fund-manager-dossier`** — was M3.7. Skipped because manager data (name, qualification, experience, AUM under management) is already populated in `data/fundamentals/<isin>.json` from the Tickertape scrape. A separate dossier skill would just be a presentation pass over data we already have; not worth a dedicated skill for v1.
+- **Per-installment SIP tax lots** — `tax-aware-rebalancer` currently treats each (isin, folio) as a single tax lot at the weighted-avg cost. For a SIP folio holding many purchases at different dates/NAVs, true LTCG/STCG classification is per-installment. Pulling per-installment data needs the CAS statement (not available via Kite MCP). Defer unless a user runs into a folio that's straddling the 1Y boundary.
 
 ## Deferred data sources
 

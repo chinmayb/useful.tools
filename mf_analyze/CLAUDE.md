@@ -81,29 +81,33 @@ See `BACKLOG.md` for the full deferred list.
 
 ## Output
 
-The canonical interface is **`MF_Portfolio_Analysis.ipynb`**. The orchestrator skill refreshes notebook cells in place — one section per analysis area (holdings → metrics → overlap → manager dossier → rebalance suggestions). Re-running replaces sections idempotently.
+Primary output is the **markdown report emitted by `portfolio-health-check`** (`data/reports/<date>/portfolio_health.md`) plus the per-skill CSV/JSON artifacts under `data/`. The report renders fine in any markdown viewer (GitHub, terminal `glow`, VS Code preview) so a notebook UI is not required for v1.
 
-## Skill Plan
+`MF_Portfolio_Analysis.ipynb` exists in the repo for ad-hoc charting/parameter sweeps; it's optional, not the canonical interface.
 
-Skills live in `.claude/skills/<name>/SKILL.md`. Built in 4 milestones:
+## Skill Plan — Final v1 scope
 
-**M1 — Data pipeline (skills 1-4)** ← current milestone
-1. `fetch-nav-history`
-2. `benchmark-mapper`
-3. `zerodha-portfolio-sync`
-4. `scrape-fund-fundamentals`
+Skills live in `.claude/skills/<name>/SKILL.md`. **8 of 9 shipped; 1 left:**
 
-**M2 — Decision-grade analysis (skills 5-6)** — *the headline value lands here*
-5. `compute-core-metrics`
-6. `portfolio-overlap-analyzer`
+**M1 — Data pipeline (4 skills)**
+1. ✅ `fetch-nav-history`
+2. ✅ `benchmark-mapper`
+3. ✅ `zerodha-portfolio-sync`
+4. ✅ `scrape-fund-fundamentals` *(Tickertape, not VRO — see BACKLOG.md for the pivot story)*
 
-**M3 — Refinement (skills 7-8)**
-7. `fund-manager-dossier`
-8. `tax-aware-rebalancer`
+**M2 — Decision-grade analysis (2 skills)** — *the headline value lands here*
+5. ✅ `compute-core-metrics`
+6. ✅ `portfolio-overlap-analyzer`
 
-**M4 — Automation (skills 9-10)**
-9. `notebook-section-writer`
-10. `portfolio-health-check` (orchestrator)
+**M3 — Tax/rebalance (1 skill)**
+7. ✅ `tax-aware-rebalancer`
+
+**M4 — Orchestration (1 skill)**
+8. ⏭ `portfolio-health-check` (orchestrator) ← last v1 skill
+
+**Deferred from original plan (now in BACKLOG.md):**
+- `fund-manager-dossier` — manager data already lives in `data/fundamentals/<isin>.json` from the Tickertape scrape; no dedicated skill needed for v1.
+- `notebook-section-writer` — `portfolio-health-check`'s markdown report is the primary surface; revisit only if interactive charting becomes a real need.
 
 ## Tax Assumptions
 
@@ -122,17 +126,12 @@ New regime (FY24-25 onward):
 - **₹ amounts:** `float64`, rounded to 2 decimal places.
 - **Error logs:** JSON Lines (`*.jsonl`) — one error object per line, downstream-parseable.
 
-## Integration Risks To Validate Early
+## Integration Risks (resolved)
 
-Two endpoints are referenced in skills but **not yet verified** to work:
-
-1. `niftyindices.com` historical TRI POST endpoint (used by `benchmark-mapper`).
-2. `valueresearchonline.com` autocomplete + scrape endpoints (used by `scrape-fund-fundamentals`).
-
-Both should be smoke-tested before building dependent skills. The manual-CSV-fallback design (in both skills) means failure is graceful — but knowing now is better than discovering during analysis.
+- ✅ `niftyindices.com` TRI endpoint — verified working at `getTotalReturnIndexString` (the originally-documented `getHistoricaldatatabletoString` returns the price index, not TRI; would have biased every alpha calculation by ~1.2% pa).
+- ✅ `valueresearchonline.com` — Cloudflare-blocked; pivoted to Tickertape (Premium user account). See `scrape-fund-fundamentals/references/tickertape_endpoints.md` for the verified contract.
 
 ## Notes
 
-- `mf_analyzer.py` and `zerodha_integration.py` are libraries called from the notebook; they are **not** the UI. The notebook is the UI.
-- There is a known bug at `zerodha_integration.py:179` (`summry` typo). `zerodha-portfolio-sync` will fix it.
+- `mf_analyzer.py` and `zerodha_integration.py` are legacy library files; the analysis pipeline is the `.claude/skills/<name>/scripts/` modules. The notebook is optional.
 - All Indian-specific conventions: ₹ (not $), INR, IST, financial year Apr-Mar.
