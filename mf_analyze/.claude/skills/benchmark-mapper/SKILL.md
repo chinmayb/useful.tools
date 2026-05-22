@@ -5,90 +5,70 @@ description: Maps an Indian mutual fund's SEBI category to its correct Total Ret
 
 # Benchmark Mapper
 
-Resolves the right Total Return Index (TRI) for each fund category and fetches its daily history. TRI matters — price-only indices (what yfinance returns) systematically understate benchmark returns by ~1-1.5% annualized, biasing alpha upward.
+Resolves the right Total Return Index (TRI) for each fund and fetches its daily history. TRI matters — price-only indices (what yfinance returns for `^NSEI`) systematically understate benchmark returns by ~1.2% annualized, which biases alpha upward.
 
 ## When to use
 
 - Computing **any** benchmark-relative metric (alpha, beat-%, downside/upside capture, tracking error).
-- The user adds a new fund and we need to know which index it's measured against.
+- The user adds a new fund and we need its benchmark.
 - Refreshing TRI history (daily cache).
 
 ## When NOT to use
 
 - For absolute return metrics that don't need a benchmark (Sortino, max DD, recovery months).
-- For debt/hybrid funds in v1 — benchmark mapping is more involved and out of scope.
+- For debt, hybrid, FoF Overseas, or commodity FoF funds in v1 — these are skipped automatically by `refresh_all_benchmarks.py` with a notice.
 
 ## Inputs
 
-A fund's category string (SEBI category name, e.g. `Small Cap`, `Flexi Cap`, `ELSS`, `Mid Cap`).
+A holdings snapshot (`data/holdings/<YYYY-MM-DD>/holdings.csv`) with `category` and `scheme_name` columns. The orchestrator reads the latest snapshot by default.
 
-## The Mapping
+## Mapping
 
-Use `references/category_to_benchmark.md` as the canonical lookup. Summary for equity funds:
+The mapping table lives in `references/category_to_benchmark.md`. Three resolution tiers:
 
-| SEBI Category | TRI Benchmark | niftyindices code |
-|---|---|---|
-| Large Cap | Nifty 100 TRI | `NIFTY 100 TRI` |
-| Large & Mid Cap | Nifty Large Midcap 250 TRI | `NIFTY LARGEMIDCAP 250 TRI` |
-| Flexi Cap / Multi Cap | Nifty 500 TRI | `NIFTY 500 TRI` |
-| Mid Cap | Nifty Midcap 150 TRI | `NIFTY MIDCAP 150 TRI` |
-| Small Cap | Nifty Smallcap 250 TRI | `NIFTY SMALLCAP 250 TRI` |
-| ELSS | Nifty 500 TRI | `NIFTY 500 TRI` |
-| Focused | Nifty 500 TRI | `NIFTY 500 TRI` |
-| Value / Contra | Nifty 500 TRI | `NIFTY 500 TRI` |
-| Dividend Yield | Nifty Dividend Opportunities 50 TRI | `NIFTY DIVIDEND OPPORTUNITIES 50 TRI` |
-| Index (Nifty 50) | Nifty 50 TRI | `NIFTY 50 TRI` |
+1. **Category default** (Large Cap → Nifty 100 TRI, Small Cap → Nifty Smallcap 250 TRI, etc.).
+2. **Scheme-name substring match** for Index funds (AMFI lumps all index funds under `Index Funds`) and Sectoral/Thematic funds (each tracks its own sector index).
+3. **Fund override** — if `scrape-fund-fundamentals` has populated `data/fundamentals/<isin>.json` with `stated_benchmark`, that wins.
 
-If a fund's stated benchmark in its SID/factsheet differs (e.g. a Flexi Cap fund benchmarked to BSE 500), **trust the fund's own benchmark** — log a note and use the fund-specified one.
-
-> **Run-order dependency:** The fund-override path only works if `scrape-fund-fundamentals` has already populated `data/fundamentals/<isin>.json` with `stated_benchmark`. When orchestrated together, fundamentals must run **before** benchmark-mapper. If fundamentals is unavailable for a fund, fall back to the category-based mapping above.
+> **Run-order:** if you want fund-level overrides, `scrape-fund-fundamentals` must run **before** `benchmark-mapper`. Without fundamentals, the category-based mapping is used everywhere.
 
 ## Procedure
 
-### Step 1 — Resolve the benchmark
+### Step 1 — Resolve the benchmark for each fund
 
-- Look up the SEBI category in the mapping table.
-- If the fund overrides via its own benchmark (from `scrape-fund-fundamentals` output), use that instead. Log the override.
-- For unknown categories: write to stderr and skip the fund. Do not fall back to "Nifty 50 TRI" silently — that's the kind of default that biases analysis.
+`refresh_all_benchmarks.py` loops over `holdings.csv` and calls `resolve_benchmark(category, scheme_name)`:
+
+- In-scope equity categories use the table in `category_to_benchmark.md`.
+- Out-of-scope categories (debt, hybrid, FoF Overseas, commodity FoF) are skipped with a notice — not silently dropped.
+- Unrecognized Index/Sectoral schemes log a warning; sectoral funds fall back to `NIFTY 500` with `benchmark_confidence: low`.
 
 ### Step 2 — Check the TRI cache
 
-- Cache path: `data/benchmarks/<index_code_slug>.csv` with columns `date, value`.
-- Cache TTL: 1 day. Skip fetch if fresh.
+- Cache path: `data/benchmarks/<slug>.csv` with columns `date, value`.
+- Cache TTL: 1 day. Fresh cache → skip the fetch.
 
 ### Step 3 — Fetch missing TRI series
 
-> ⚠️ **Unverified endpoint.** The niftyindices.com historical TRI endpoint described below is documented from memory and **has not been smoke-tested**. Before relying on this skill in the pipeline, run `scripts/smoke_test_tri.py` against a known index (e.g. `NIFTY 50 TRI`) and confirm the response shape. If the endpoint differs, update this section and the script. If it's gone entirely, the manual-CSV fallback (Step 4) is the recovery path.
+Calls `scripts/fetch_tri.py` per index. The verified endpoint and payload contract are documented in `references/niftyindices_endpoint.md` — read it before changing the script:
 
-`niftyindices.com` exposes historical data via (best understanding):
-
-```
-POST https://www.niftyindices.com/Backpage.aspx/getHistoricaldatatabletoString
-Body (JSON, form-encoded): {"name": "<INDEX NAME>", "startDate": "DD-MMM-YYYY", "endDate": "DD-MMM-YYYY"}
-```
-
-Response: JSON array of `{HistoricalDate, TotalReturnsIndex}` rows. Date format `DD MMM YYYY` (e.g. `15 Jan 2024`); normalize to ISO `YYYY-MM-DD`. The endpoint typically caps each request to ~1 year — chunk longer ranges.
-
-Implementation lives in `scripts/fetch_tri.py`.
+- Endpoint: `POST https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString` (note: **not** the price-index endpoint `getHistoricaldatatabletoString`).
+- Required headers: Referer, Origin, X-Requested-With, browser UA. Without them, the server hangs (no 4xx).
+- Body: `{"cinfo": "<stringified-JSON-with-single-quotes>"}`, inner keys `name` / `startDate` / `endDate` / `indexName`.
+- Response: `{"d": "<stringified-array>"}` — `d` requires a second `json.loads`. Rows have `Date` (DD MMM YYYY), `TotalReturnsIndex` (string float).
+- Chunking: 365-day chunks with 1-second courtesy delay between chunks.
 
 ### Step 4 — Manual-CSV fallback
 
-If the niftyindices fetch fails (HTTP error, anti-scraping HTML response, empty JSON), check for `data/benchmarks/<slug>.manual.csv` with columns `date, value`. If present, use it. If neither works, log a clear error and skip that benchmark — caller can decide how to proceed.
+If all chunks fail (HTTP error, anti-scraping HTML, persistent timeouts), `fetch_tri.py` looks for `data/benchmarks/<slug>.manual.csv` with columns `date, value`. If present, it's used. If neither path works, the index is logged to `_errors.jsonl` and the orchestrator continues with the rest.
 
 ### Step 5 — Return benchmark series
 
-Return a DataFrame:
-
-```
-date       | benchmark_code        | value
-2024-01-15 | NIFTY SMALLCAP 250 TRI | 18472.34
-```
+Each cached CSV is the persistent return value. Downstream skills (`compute-core-metrics`) read these directly via `pd.read_csv("data/benchmarks/<slug>.csv")`.
 
 ## Output
 
-- **Files written:** `data/benchmarks/<slug>.csv` per index.
-- **Returned:** DataFrame as above.
-- **Helper function:** `get_benchmark_for_fund(scheme_code) -> (benchmark_code, tri_series)`.
+- **Files written:** `data/benchmarks/<slug>.csv` per index; `data/benchmarks/_errors.jsonl` on failure.
+- **Returned:** the script writes files and prints a summary; downstream loads from disk.
 
 ## Caching
 
@@ -96,22 +76,25 @@ date       | benchmark_code        | value
 |---|---|
 | Benchmark TRI CSV | 1 day |
 
-niftyindices.com has no public rate limit documented; 1 req/sec is courteous.
+niftyindices has no documented rate limit; 1 req/sec between chunks is courteous.
 
 ## Error Handling
 
-- **Unknown category:** stderr + skip. Caller must decide how to proceed without a benchmark.
-- **niftyindices POST returns HTML (anti-scraping):** the request shape changed. Fall back to the manual CSV at `data/benchmarks/<slug>.manual.csv` if present. If neither works, skip with a clear error.
-- **TRI series has gaps:** acceptable (NSE non-trading days). Don't forward-fill in this skill — let downstream skills decide.
-- **Fund's stated benchmark not in the mapping table:** log + use Nifty 500 TRI as a best-effort default for flexi/multi-style funds, but mark the result as `benchmark_confidence: low` in the output.
+- **Unknown category:** stderr + skip with the fund name listed. Caller decides whether to proceed.
+- **niftyindices request hangs / 5xx:** retry path is the manual-CSV fallback (Step 4). Log the failed range to `_errors.jsonl`.
+- **Empty `d` response:** widen the date range — this usually means the range hit only market holidays.
+- **Sectoral fund name doesn't match any pattern:** falls back to `NIFTY 500` with a low-confidence log line.
 
 ## Bundled Scripts
 
-- `scripts/fetch_tri.py` — fetches one TRI series from niftyindices.
-- `scripts/refresh_all_benchmarks.py` — refreshes all cached benchmarks in `data/benchmarks/`.
+- `scripts/fetch_tri.py` — fetches one TRI series from niftyindices with chunking + cache.
+- `scripts/refresh_all_benchmarks.py` — orchestrator that resolves all benchmarks for the latest holdings snapshot and fetches each.
 
-See `references/category_to_benchmark.md` for the full mapping (including debt/hybrid placeholders marked "v2.0 — out of scope").
+## Bundled References
 
-## A Note on Why TRI Matters
+- `references/niftyindices_endpoint.md` — full endpoint contract (verified 2026-05-22).
+- `references/category_to_benchmark.md` — canonical SEBI category → TRI mapping + sectoral substring rules + v1/v2 scope.
 
-Indian equity indices have a typical dividend yield of ~1.2%. A price-only index drops dividends; TRI reinvests them. Over 5 years that's ~6-7% understated benchmark return — enough to make a fund look alpha-generative when it's actually flat to benchmark. Never compute alpha vs a price index in this project.
+## Why TRI Matters
+
+Indian equity indices have ~1.2% trailing dividend yield. Over 5 years that compounds to ~6-7% — enough to make a fund look alpha-generative when it's actually flat to benchmark. Never compute alpha vs a price index in this project.

@@ -87,7 +87,9 @@ def lots_from_zerodha(payload: list[dict]) -> pd.DataFrame:
     rows = []
     for item in payload:
         try:
-            isin = item["isin"]
+            # Zerodha MCP returns ISIN under "tradingsymbol" for MF holdings;
+            # accept either spelling.
+            isin = item.get("isin") or item["tradingsymbol"]
             units = float(item["quantity"])
             avg_cost = float(item["average_price"])
             current_nav = float(item.get("last_price", item.get("nav", 0.0)))
