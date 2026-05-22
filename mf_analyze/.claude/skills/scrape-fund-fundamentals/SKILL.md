@@ -1,27 +1,51 @@
 ---
 name: scrape-fund-fundamentals
-description: Scrapes Value Research Online and screener.in for Indian mutual fund fundamentals (expense ratio, AUM, fund manager + tenure, top-10 holdings, fund's stated benchmark) with manual-CSV-fallback. Use whenever fundamentals are needed for analysis, manager dossier, or overlap work — including phrases like "fetch fund fundamentals", "get expense ratio", "who manages this fund", "what does this fund hold". Always use this skill before composite scoring or overlap analysis. Honors a 7-day cache TTL because fundamentals change slowly (monthly disclosure cycle).
+description: Pulls per-fund fundamentals (expense ratio, AUM, fund manager + tenure, stated benchmark, risk classification, Tickertape scorecard) for Indian mutual funds via Tickertape's server-side-rendered fund pages. Reads the JWT from ~/.config/mf_analyze/tickertape.env. Use whenever fundamentals are needed for composite scoring, manager dossier, or any analysis that goes beyond pure NAV-based metrics. Honors a 14-day cache TTL because fundamentals change slowly. Don't use for fully-real-time data — the data reflects last monthly disclosure.
 ---
 
 # Scrape Fund Fundamentals
 
-Pulls qualitative + holdings data that NAV history can't reveal: expense ratio, AUM, manager name and tenure, top-10 holdings, fund's stated benchmark. Source order is VRO → screener.in → manual override.
+Pulls qualitative + ratings data that NAV history can't reveal. Tickertape is the data source — chosen after smoke-testing showed every other public source (Value Research, screener.in, moneycontrol) is Cloudflare-gated or has no MF coverage.
 
 ## When to use
 
 - Composite scoring (need expense ratio + manager info).
 - Manager dossier (need manager name + tenure).
-- Overlap analyzer (need top-10 holdings per fund).
-- Benchmark mapper sanity check (does the fund use a different benchmark than the SEBI category default?).
+- Cross-check against `benchmark-mapper` (fund's stated benchmark vs SEBI category default).
+- Whenever Tickertape's proprietary 5-dim scorecard would augment the consolidation decision.
 
 ## When NOT to use
 
 - For pure return-based metrics (Sortino, max DD, alpha) — those need only NAV.
 - For real-time NAV (use AMFI / `fetch-nav-history`).
+- For full top-N stock holdings — Tickertape's SSR'd page exposes sector breakdown but not the individual top-10 stock weights. Holdings data is loaded via a separate XHR on the portfolio tab and is **deferred for v1** (see `BACKLOG.md`).
 
 ## Inputs
 
-A list of ISINs (preferred) or fund names. ISIN is more reliable; fund names are ambiguous (Direct/Regular, Growth/IDCW variants).
+A list of ISINs, or `--portfolio` to read the latest holdings snapshot.
+
+## Authentication
+
+Tickertape requires a Premium subscription for full data access. The JWT lives at `~/.config/mf_analyze/tickertape.env` (chmod 600, never committed). The token has a **24-hour TTL** and must be refreshed by:
+
+1. Logging into https://www.tickertape.in
+2. Opening DevTools → Network → Fetch/XHR
+3. Picking any `api.tickertape.in` or `ecosystem.api.tickertape.in` request → right-click → **Copy as cURL (bash)**
+4. Extracting the `jwt=...` from `-b` and the `x-csrf-token` header value
+5. Updating `~/.config/mf_analyze/tickertape.env` with both values
+
+The skill detects an expired token (HTTP 401) and prints exactly these instructions if it fires.
+
+## Architecture
+
+Two endpoints, two access modes:
+
+| Source | URL pattern | Auth needed? | Data |
+|---|---|---|---|
+| **SSR'd fund page** | `https://www.tickertape.in/mutualfunds/<slug>-<sid>` | **No** | Everything below in one shot via `__NEXT_DATA__` embedded JSON |
+| **Search API** | `https://api.tickertape.in/search?text=<q>&types=mutualfund` | **Yes** | ISIN → SID resolution only |
+
+The page is fully SSR'd by Next.js — the 335KB of `pageProps` JSON embedded in the HTML contains scorecard, manager, expense ratio, AUM, peers, CAGR series, exit load, tax meta. **No auth needed for the page itself** — auth is only needed once per fund to resolve ISIN → SID via the search API.
 
 ## Output Schema
 
@@ -29,122 +53,122 @@ For each fund, write `data/fundamentals/<isin>.json`:
 
 ```json
 {
-  "isin": "INF200K01VK5",
-  "scheme_name": "SBI Small Cap Fund - Direct Plan - Growth",
-  "category": "Small Cap",
-  "fund_house": "SBI Mutual Fund",
-  "expense_ratio_pct": 0.68,
-  "aum_cr": 28450,
-  "aum_as_of": "2026-04-30",
-  "manager": {
-    "primary": "R. Srinivasan",
-    "since": "2013-11-01",
-    "co_managers": []
-  },
-  "stated_benchmark": "Nifty Smallcap 250 TRI",
-  "top_holdings": [
-    {"company": "Kalpataru Projects", "weight_pct": 3.85, "sector": "Construction"},
-    ...
+  "isin": "INF879O01027",
+  "tickertape_sid": "M_PARO",
+  "scheme_name": "Parag Parikh Flexi Cap Fund",
+  "amc": "PPFAS Asset Management Pvt. Ltd.",
+  "plan": "Direct",
+  "option": "Growth",
+  "subsector": "Flexi Cap Fund",
+  "risk_classification": "Very High",
+  "stated_benchmark": "NIFTY 500 - TRI",
+  "nav_close": 90.614,
+  "expense_ratio_pct": 0.53,
+  "category_expense_ratio_pct": 1.35,
+  "aum_cr": 160596.28,
+  "exit_load_pct": 2,
+  "exit_load_remarks": "Nil upto 10% of units. For remaining units 2% on or before 365D...",
+  "lock_in_months": 0,
+  "managers": [
+    {"name": "Rajeev Thakkar", "fm_code": 474, "experience_years": 18, "qualification": "B.Com, CA, CFA, ICWA"}
   ],
-  "holdings_as_of": "2026-04-30",
-  "source": "vro",
-  "scraped_at": "2026-05-22T10:23:00+05:30"
+  "scorecard": [
+    {"name": "Performance", "tag": "High", "color": "green", "score": 6.76, "rank": 7, "peers": 45},
+    {"name": "Risk",        "tag": "Low",  "color": "green", "score": ..., ...}
+  ],
+  "cagr_series": [{"yearDiff": 0.5, "value_pct": -4.03}, {"yearDiff": 1, "value_pct": 1.04}, ...],
+  "scraped_at": "2026-05-23T00:25:00+05:30",
+  "source": "tickertape"
 }
 ```
 
+Manual overrides at `data/fundamentals/<isin>.manual.json` always win (same schema; set `"source": "manual"`).
+
 ## Procedure
 
-### Step 1 — Check for manual override first
+### Step 1 — Manual override check
 
-If `data/fundamentals/<isin>.manual.json` exists, **prefer it over any scrape**. This is the fallback when scrapers break — the user pastes a hand-curated JSON and the pipeline keeps moving.
+If `data/fundamentals/<isin>.manual.json` exists, return it immediately. No scrape.
 
-Manual files use the same schema; set `"source": "manual"`.
+### Step 2 — Cache check
 
-### Step 2 — Check the cache
+If `data/fundamentals/<isin>.json` exists and its mtime is < 14 days old, return cache. Fundamentals follow the monthly disclosure cycle; 14 days = ~2× per disclosure.
 
-Otherwise check `data/fundamentals/<isin>.json` mtime. If < 14 days old, use cache. Fundamentals change on monthly disclosure cycle (~T+30); a 14-day TTL refreshes ~2× per disclosure cycle and minimizes scraping load.
+### Step 3 — Resolve ISIN → Tickertape SID
 
-### Step 3 — Scrape Value Research Online (primary)
+ISIN doesn't appear in Tickertape's search response, so resolution is by **name match**:
 
-VRO URL pattern: `https://www.valueresearchonline.com/funds/<vro_slug>/`.
+1. Look up the AMFI scheme name from `data/amfi_scheme_master.csv` (joined on ISIN).
+2. Strip the trailing " - Direct Plan - Growth" / "-Direct-Growth" suffixes and normalize.
+3. `GET https://api.tickertape.in/search?text=<query>&types=mutualfund` (auth required).
+4. Filter `items[]` for `option == "Growth"` and pick the one whose `fullname` best matches the AMFI name.
 
-> ⚠️ **Unverified endpoint.** The ISIN → vro_slug lookup is documented here as a VRO autocomplete endpoint (`/api/v2/funds/search-suggestions/`) **from memory** — it has not been smoke-tested. Before relying on this skill, run `scripts/smoke_test_scrapers.py` against a known ISIN (e.g. `INF200K01VK5`). If the endpoint differs, update `references/vro_selectors.md` and the script. If it's gone entirely, the **manual-CSV-fallback** (Step 1) keeps the pipeline running.
+The resolved SID is stored in the cached JSON; subsequent runs skip search.
 
-Selectors to extract (see `references/vro_selectors.md` for the full set — these change occasionally):
+### Step 4 — Fetch and parse the SSR'd page
 
-- Expense ratio
-- AUM
-- Fund manager + start date
-- Top-10 holdings table
-- Stated benchmark
+`GET https://www.tickertape.in/mutualfunds/<sid>` — Tickertape redirects bare SID URLs to the canonical `<slug>-<sid>` URL automatically. **No auth needed.**
 
-### Step 4 — Cross-check with screener.in (supplemental)
+Parse `__NEXT_DATA__`:
 
-For each fund, also fetch `https://www.screener.in/mutual-funds/<screener_slug>/` if available. Use it to:
+```python
+import re, json
+m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>', html, re.DOTALL)
+data = json.loads(m.group(1))
+page_props = data['props']['pageProps']
+```
 
-- Sanity-check AUM and expense ratio (mismatch >5% → log warning).
-- Get sector breakdown if VRO blocks the holdings table.
+Read from these `page_props` substructures:
 
-screener.in is more equity-focused; MF coverage is partial. Treat its data as supplemental, not authoritative.
+| Field | Path in pageProps |
+|---|---|
+| ISIN | `securitySummary.meta.isin` |
+| Plan/Option | `securitySummary.meta.plan` / `.option` |
+| AMC | `securitySummary.meta.amc` |
+| Stated benchmark | `securitySummary.meta.benchmarkIndex` |
+| Risk classification | `securitySummary.meta.riskClassification` |
+| NAV close | `securityInfo.navClose` |
+| Expense ratio | `securitySummary.keyRatios[]` where `backL == "expRatio"` |
+| Category expense ratio | `securitySummary.keyRatios[]` where `backL == "catExpRatio"` |
+| AUM (Cr) | `securitySummary.amcDetails.aum` |
+| Exit load + remarks | `securitySummary.schemeInfo[]` where `backL == "exitLoad"` |
+| Lock-in (months) | `securitySummary.schemeInfo[]` where `backL == "lockInPeriod"` |
+| Managers | `fundManagers[]` |
+| Scorecard | `scorecard[]` |
+| CAGR series | `securitySummary.cagrSeries[]` |
 
-### Step 5 — Write the JSON
+### Step 5 — Write per-ISIN JSON
 
-Write to `data/fundamentals/<isin>.json`. Set `"source": "vro"` or `"vro+screener"` accordingly.
+Write to `data/fundamentals/<isin>.json`. On any error, write a partial record with `"scrape_status": "partial"` and continue — downstream skills check `scrape_status` and fall back gracefully.
 
-If both scrapers fail and no manual override exists, write a stub with `"scrape_status": "failed"` and a clear error message in `data/fundamentals/_errors.log`. **Do not silently skip** — downstream skills need to know.
+## Error Handling
+
+| Failure | Detection | Recovery |
+|---|---|---|
+| Expired JWT | HTTP 401 on search | Print refresh instructions (see "Authentication"), exit nonzero |
+| Tickertape down | HTTP 5xx or timeout | Log + skip that ISIN; continue with others |
+| ISIN not found in search | search `total == 0` | Log; check for `<isin>.manual.json`; otherwise skip |
+| Multiple ambiguous matches | search returns >1 Growth result | Use rapidfuzz on AMFI name vs each `fullname`; pick highest score >0.85; else skip |
+| `__NEXT_DATA__` missing | regex no-match | Tickertape may have changed page structure — alert with selector path; fall back to manual JSON |
+| Page returns 404 | HTTP 404 | Cached search SID is stale — clear cache, re-resolve, retry once |
 
 ## Caching
 
-| Source | TTL | Rationale |
+| Artifact | TTL | Notes |
 |---|---|---|
-| Manual override | ∞ | User-curated; never expires |
-| VRO/screener scrape | 14 days | Monthly disclosure cycle; reduces breakage exposure |
+| Per-ISIN JSON | 14 days | Disclosure cycle is monthly |
+| ISIN → SID mapping | embedded in JSON | Survives until JSON cache is cleared |
+| Manual override | ∞ | Never expires |
 
-`--force-refresh` overrides cache (use sparingly, manually).
+## Out of scope (v1) — top-N stock holdings
 
-## Error Handling — the scraping reality check
-
-These sites *will* redesign. When they do:
-
-1. **VRO selector returns empty** → fall back to screener.in for that field.
-2. **Both return empty** → check if `<isin>.manual.json` exists. If yes, use it. If no, write a stub + error log entry like:
-   ```
-   INF200K01VK5: VRO selector .fund-header__expense returned empty. Likely VRO layout changed. Update selectors in references/vro_selectors.md OR paste a manual JSON at data/fundamentals/INF200K01VK5.manual.json.
-   ```
-3. **HTTP 403 / cloudflare challenge** → both sites have anti-bot. Sleep 2s between requests; rotate a small set of user-agent strings (see `scripts/scrape_vro.py`).
-4. **Top-10 holdings sum to >100% or <70%** → data quality issue. Log and exclude that holdings list from overlap analysis.
-
-### The smoke test
-
-`scripts/smoke_test_scrapers.py` fetches one known-good fund (`INF200K01VK5`) from each source and asserts all expected fields parse. Run weekly via `refresh-cache.sh`. When it fails, you know which selector broke before the analysis pipeline does.
-
-## Output
-
-- **Files written:** `data/fundamentals/<isin>.json` per fund; optional `data/fundamentals/_errors.log`.
-- **Returned:** dict keyed by ISIN.
+Tickertape's portfolio tab loads top-N stock weights via a separate authenticated XHR that the SSR'd page does not include. Skipping this for v1 means `portfolio-overlap-analyzer` will use return-correlation as a proxy for holdings overlap (correlated funds → likely overlapping). True top-N stock overlap is deferred — see `BACKLOG.md`.
 
 ## Bundled Scripts
 
-- `scripts/scrape_vro.py` — single-fund VRO scrape.
-- `scripts/scrape_screener.py` — single-fund screener.in scrape.
-- `scripts/refresh_cache.sh` — weekly batch refresh; gated on cache age.
-- `scripts/smoke_test_scrapers.py` — selector health check.
+- `scripts/scrape_tickertape.py` — main scraper. CLI: per-ISIN or `--portfolio`.
+- `scripts/lib_tickertape.py` — pure helpers (auth-header construction, page parser, ISIN/SID resolver).
 
 ## Bundled References
 
-- `references/vro_selectors.md` — current VRO CSS selectors + last-verified date.
-- `references/screener_selectors.md` — current screener.in selectors.
-- `references/manual_template.json` — copy-paste template for `<isin>.manual.json`.
-
-## A Note on Robustness
-
-Scraping is the most fragile layer in this project. The 14-day cache + manual override design is deliberate: when scrapers break, the user can keep working by pasting data from the website. The pipeline degrades gracefully, not catastrophically.
-
-## A Note on Top-10 Holdings
-
-VRO/screener only expose the **top-10 holdings** per scheme. Full-portfolio data lives in AMFI's monthly PDF disclosures and is deferred to v2.0. This means:
-
-- **`portfolio-overlap-analyzer` reports a lower bound on overlap.** Two funds showing 30% overlap on top-10 could be 50%+ on full portfolio. Use the overlap matrix as a "definitely-at-least" floor, not a precise number.
-- **Sector and factor exposure** are not captured here (also deferred).
-
-This caveat is also stated in `CLAUDE.md` so it doesn't surprise the analysis downstream.
+- `references/tickertape_endpoints.md` — endpoint contracts (search auth, page URL pattern, response-shape reference).
