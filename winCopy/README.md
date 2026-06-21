@@ -8,9 +8,11 @@ A tiny, install-free Windows tool to copy one folder to another on a schedule
 
 | File | Purpose |
 |---|---|
-| `launch.bat` | Double-click to open the GUI |
+| `launch.bat` | Double-click to open the GUI (delegates to `WinCopy-Launch.vbs` to avoid a PowerShell console flash) |
+| `WinCopy-Launch.vbs` | Tiny VBS shim that starts `WinCopy-GUI.ps1` with a hidden PowerShell host. Can be double-clicked directly |
 | `WinCopy-GUI.ps1` | Windows Forms UI: pick folders + schedule, save & schedule, view, delete |
 | `WinCopy-Run.ps1` | Headless copy script (Copy-Item + logging). Invoked by Task Scheduler |
+| `WinCopy-Hidden.vbs` | Auto-generated tiny VBS launcher used by the scheduled task to run `WinCopy-Run.ps1` with no console window |
 | `winCopy-config.json` | Auto-generated when you click **Save & Schedule** |
 | `winCopy.log` | Auto-generated; one entry per run |
 
@@ -42,7 +44,7 @@ The GUI remembers your last choices (including the chosen interval).
 ## Behavior
 
 - **Copy method:** native PowerShell `Copy-Item -Recurse -Force`. The directory structure under the source is preserved under the destination. Existing files are overwritten.
-- **Schedule:** Windows Task Scheduler, either daily at the chosen time or at the chosen repeating interval (1–60 Minutes or 1–60 Hours), task name `WinCopyDailyJob`. Re-saving overwrites the task.
+- **Schedule:** Windows Task Scheduler, either daily at the chosen time or at the chosen repeating interval (1–60 Minutes or 1–60 Hours), task name `WinCopyDailyJob`. Re-saving overwrites the task. The task launches via `wscript.exe WinCopy-Hidden.vbs`, which starts PowerShell with a hidden window so no console pops up on each scheduled run.
 - **Log:** appended to `winCopy.log` alongside the scripts. One compact summary line per run. The file is trimmed in place to the most recent 500 lines after every run, so it stays small even on short intervals. Per-file errors are summarized in the count, with up to 5 error detail lines per run.
 
 ## Sample log
