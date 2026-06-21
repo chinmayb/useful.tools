@@ -2,3 +2,4 @@
 - Take input directories and output directories from the user
 - executable exe or windows script would do, nothing fancy
 - executed logs can be added somewhere
+- Only sync incremental changes: compare each source file against its counterpart in the destination and copy only when it is new or modified (e.g. by last-write time and/or size). Files that already match in the destination should be skipped. Existing destination files that no longer exist in the source are left alone (no deletes).
