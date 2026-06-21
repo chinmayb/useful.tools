@@ -1,0 +1,4 @@
+- A winRm script that copies from one windows drive to another drive and that runs periodically every day given time
+- Take input directories and output directories from the user
+- executable exe or windows script would do, nothing fancy
+- executed logs can be added somewhere
