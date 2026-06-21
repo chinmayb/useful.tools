@@ -1,14 +1,15 @@
 # WinCopy
 
 A tiny, install-free Windows tool to copy one folder to another on a schedule
-(daily at a chosen time, or every 2 minutes).
+(daily at a chosen time, or at a repeating interval up to every 60 minutes /
+24 hours).
 
 ## What's included
 
 | File | Purpose |
 |---|---|
-| `launch.bat` | Double-click for a menu (Launch GUI / List task / Run / Delete / Open log) |
-| `WinCopy-GUI.ps1` | Windows Forms UI: pick folders + schedule, save & schedule |
+| `launch.bat` | Double-click to open the GUI |
+| `WinCopy-GUI.ps1` | Windows Forms UI: pick folders + schedule, save & schedule, view, delete |
 | `WinCopy-Run.ps1` | Headless copy script (Copy-Item + logging). Invoked by Task Scheduler |
 | `winCopy-config.json` | Auto-generated when you click **Save & Schedule** |
 | `winCopy.log` | Auto-generated; one entry per run |
@@ -18,24 +19,31 @@ No installs, no admin rights needed (uses current user's Task Scheduler).
 ## Usage
 
 1. Copy this folder onto the Windows machine.
-2. Double-click **`launch.bat`**.
+2. Double-click **`launch.bat`** (or run `WinCopy-GUI.ps1` directly).
 3. In the GUI:
    - **Browse...** to pick the source folder.
    - **Browse...** to pick the destination folder.
    - Choose a **Schedule**:
      - **Daily at** a specific time (e.g., `22:00`), or
-     - **Every 2 minutes** (repeats indefinitely, starting ~1 minute after you save).
-   - Click **Save & Schedule**. A Task Scheduler task named `WinCopyDailyJob` is created.
+     - **Every `<N>` `<Minutes|Hours>`** — pick the interval from the two
+       dropdowns (e.g. `Every 60 Minutes`, `Every 1 Hours`, `Every 2 Minutes`).
+       Allowed values: 1, 2, 5, 10, 15, 20, 30, 45, 60.
+   - Click **Save & Schedule**. A Task Scheduler task named `WinCopyDailyJob`
+     is created (re-saving overwrites it).
 4. Click **Run Now** to copy immediately (also useful as a quick sanity check).
-5. Click **Open Log** to view `winCopy.log`.
+5. Click **View Task** to see the scheduled task's state, last run, last
+   result and next run time in a pop-up.
+6. Click **Delete Task** to remove the scheduled task (asks for confirmation;
+   your source/destination files are untouched).
+7. Click **Open Log** to view `winCopy.log`.
 
-The GUI remembers your last choices.
+The GUI remembers your last choices (including the chosen interval).
 
 ## Behavior
 
 - **Copy method:** native PowerShell `Copy-Item -Recurse -Force`. The directory structure under the source is preserved under the destination. Existing files are overwritten.
-- **Schedule:** Windows Task Scheduler, either daily at the chosen time or every 2 minutes, task name `WinCopyDailyJob`. Re-saving overwrites the task.
-- **Log:** appended to `winCopy.log` alongside the scripts. One compact summary line per run. The file is trimmed in place to the most recent 500 lines after every run, so it stays small even on the "every 2 minutes" schedule. Per-file errors are summarized in the count, with up to 5 error detail lines per run.
+- **Schedule:** Windows Task Scheduler, either daily at the chosen time or at the chosen repeating interval (1–60 Minutes or 1–60 Hours), task name `WinCopyDailyJob`. Re-saving overwrites the task.
+- **Log:** appended to `winCopy.log` alongside the scripts. One compact summary line per run. The file is trimmed in place to the most recent 500 lines after every run, so it stays small even on short intervals. Per-file errors are summarized in the count, with up to 5 error detail lines per run.
 
 ## Sample log
 
@@ -48,7 +56,9 @@ The GUI remembers your last choices.
 
 ## Removing the schedule
 
-In PowerShell:
+Easiest: open the GUI and click **Delete Task**.
+
+Alternatively, in PowerShell:
 ```powershell
 Unregister-ScheduledTask -TaskName WinCopyDailyJob -Confirm:$false
 ```

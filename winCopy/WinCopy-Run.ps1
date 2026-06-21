@@ -4,8 +4,8 @@
     source -> destination using Copy-Item, logging to winCopy.log.
 
     The log is appended to on every run, and trimmed in place to the most
-    recent $MaxLogLines lines so it stays small even under the
-    "every 2 minutes" schedule.
+    recent $MaxLogLines lines so it stays small even under short repeating
+    schedules (e.g. every 2 minutes).
 
 .NOTES
     Invoked by Windows Task Scheduler or by the GUI "Run Now" button.
