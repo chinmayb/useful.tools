@@ -3,61 +3,85 @@
     Headless copy script for WinCopy. Reads winCopy-config.json and copies
     source -> destination using Copy-Item, logging to winCopy.log.
 
+    The log is appended to on every run, and trimmed in place to the most
+    recent $MaxLogLines lines so it stays small even under the
+    "every 2 minutes" schedule.
+
 .NOTES
     Invoked by Windows Task Scheduler or by the GUI "Run Now" button.
 #>
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ConfigPath = Join-Path $ScriptDir 'winCopy-config.json'
-$LogPath    = Join-Path $ScriptDir 'winCopy.log'
+$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ConfigPath  = Join-Path $ScriptDir 'winCopy-config.json'
+$LogPath     = Join-Path $ScriptDir 'winCopy.log'
+$MaxLogLines = 500    # cap the log at the last N lines
+$MaxErrorLogPerRun = 5  # cap per-file error detail lines per run
 
-function Write-Log {
+# Buffer log lines for this run; we write them in one shot and then trim.
+$script:LogBuffer = New-Object System.Collections.Generic.List[string]
+
+function Add-LogLine {
     param([string]$Message)
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $line = "[$timestamp] $Message"
-    Add-Content -Path $LogPath -Value $line
+    [void]$script:LogBuffer.Add($line)
     Write-Host $line
+}
+
+function Flush-Log {
+    if ($script:LogBuffer.Count -eq 0) { return }
+
+    # Append this run's lines.
+    Add-Content -Path $LogPath -Value $script:LogBuffer
+
+    # In-place rotation: keep only the last $MaxLogLines lines.
+    try {
+        $all = Get-Content -Path $LogPath -ErrorAction Stop
+        if ($all.Count -gt $MaxLogLines) {
+            $tail = $all | Select-Object -Last $MaxLogLines
+            Set-Content -Path $LogPath -Value $tail -Encoding UTF8
+        }
+    } catch {
+        # Trimming is best-effort; don't fail the run because of log rotation.
+    }
+
+    $script:LogBuffer.Clear()
 }
 
 try {
     if (-not (Test-Path $ConfigPath)) {
-        Write-Log "ERROR: Config file not found at $ConfigPath"
+        Add-LogLine "FAIL no-config path=$ConfigPath"
+        Flush-Log
         exit 1
     }
 
-    $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-    $source = $config.source
+    $config      = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+    $source      = $config.source
     $destination = $config.destination
 
-    Write-Log "=== WinCopy Run Start ==="
-    Write-Log "Source: $source"
-    Write-Log "Destination: $destination"
-
     if (-not (Test-Path $source)) {
-        Write-Log "ERROR: Source directory does not exist: $source"
+        Add-LogLine "FAIL src-missing src=$source"
+        Flush-Log
         exit 1
     }
 
     if (-not (Test-Path $destination)) {
-        Write-Log "Destination does not exist. Creating: $destination"
         New-Item -ItemType Directory -Path $destination -Force | Out-Null
     }
 
-    $startTime = Get-Date
-    $fileCount = 0
+    $startTime  = Get-Date
+    $fileCount  = 0
     $errorCount = 0
+    $errorsLogged = 0
 
-    # Enumerate all files under source, preserve directory structure under destination.
     $sourceFull = (Resolve-Path $source).Path.TrimEnd('\')
     $destFull   = (Resolve-Path $destination).Path.TrimEnd('\')
 
-    # Use foreach (not ForEach-Object) so $fileCount/$errorCount updates
-    # are visible outside the loop without needing $script: scoping.
     $items = Get-ChildItem -Path $sourceFull -Recurse -Force -ErrorAction SilentlyContinue
     foreach ($item in $items) {
-        $relative = $item.FullName.Substring($sourceFull.Length).TrimStart('\')
+        $relative   = $item.FullName.Substring($sourceFull.Length).TrimStart('\')
         $targetPath = Join-Path $destFull $relative
 
         try {
@@ -75,20 +99,24 @@ try {
             }
         } catch {
             $errorCount++
-            Write-Log "ERROR copying $($item.FullName): $($_.Exception.Message)"
+            if ($errorsLogged -lt $MaxErrorLogPerRun) {
+                Add-LogLine "  err $($item.FullName): $($_.Exception.Message)"
+                $errorsLogged++
+            }
         }
     }
 
     $duration = [int]((Get-Date) - $startTime).TotalSeconds
-    Write-Log "Files copied: $fileCount"
-    Write-Log "Errors: $errorCount"
-    Write-Log "Run complete. Duration: ${duration}s"
-    Write-Log ""
+    $status   = if ($errorCount -gt 0) { 'FAIL' } else { 'OK' }
+    Add-LogLine "$status files=$fileCount err=$errorCount dur=${duration}s src=$sourceFull dst=$destFull"
+
+    Flush-Log
 
     if ($errorCount -gt 0) { exit 1 } else { exit 0 }
 
 } catch {
-    Write-Log "FATAL: $($_.Exception.Message)"
-    Write-Log ""
+    Add-LogLine "FATAL $($_.Exception.Message)"
+    Flush-Log
     exit 1
 }
+

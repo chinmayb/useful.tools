@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
     Windows Forms GUI for WinCopy. Lets the user pick a source folder,
-    destination folder, and daily run time, then registers a Windows Task
-    Scheduler job that invokes WinCopy-Run.ps1 every day at that time.
+    destination folder, and a schedule (either daily at a chosen time or
+    every 2 minutes), then registers a Windows Task Scheduler job that
+    invokes WinCopy-Run.ps1 on that schedule.
 
 .NOTES
     Run with:  powershell -ExecutionPolicy Bypass -File WinCopy-GUI.ps1
@@ -20,6 +21,7 @@ $TaskName   = 'WinCopyDailyJob'
 $initialSource = ''
 $initialDest   = ''
 $initialTime   = [DateTime]::Today.AddHours(22)  # default 22:00
+$initialMode   = 'Daily'                          # 'Daily' or 'Every2Minutes'
 if (Test-Path $ConfigPath) {
     try {
         $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
@@ -31,13 +33,14 @@ if (Test-Path $ConfigPath) {
                 $initialTime = $parsed
             }
         }
+        if ($cfg.scheduleMode) { $initialMode = $cfg.scheduleMode }
     } catch { }
 }
 
 # ----- Form -----
 $form               = New-Object System.Windows.Forms.Form
-$form.Text          = 'WinCopy - Schedule Daily Folder Copy'
-$form.Size          = New-Object System.Drawing.Size(560, 320)
+$form.Text          = 'WinCopy - Schedule Folder Copy'
+$form.Size          = New-Object System.Drawing.Size(560, 380)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox   = $false
@@ -90,25 +93,48 @@ $btnDest.Add_Click({
 })
 $form.Controls.Add($btnDest)
 
-# Time row
-$lblTime = New-Object System.Windows.Forms.Label
-$lblTime.Text = 'Daily run time:'
-$lblTime.Location = New-Object System.Drawing.Point(15, 100)
-$lblTime.Size = New-Object System.Drawing.Size(100, 22)
-$form.Controls.Add($lblTime)
+# Schedule mode row
+$lblMode = New-Object System.Windows.Forms.Label
+$lblMode.Text = 'Schedule:'
+$lblMode.Location = New-Object System.Drawing.Point(15, 100)
+$lblMode.Size = New-Object System.Drawing.Size(100, 22)
+$form.Controls.Add($lblMode)
+
+$rbDaily = New-Object System.Windows.Forms.RadioButton
+$rbDaily.Text = 'Daily at'
+$rbDaily.Location = New-Object System.Drawing.Point(120, 98)
+$rbDaily.Size = New-Object System.Drawing.Size(80, 24)
+$rbDaily.Checked = ($initialMode -ne 'Every2Minutes')
+$form.Controls.Add($rbDaily)
 
 $dtpTime = New-Object System.Windows.Forms.DateTimePicker
-$dtpTime.Format = [System.Windows.Forms.DateTimePickerFormat]::Time
+$dtpTime.Format = [System.Windows.Forms.DateTimePickerFormat]::Custom
+$dtpTime.CustomFormat = 'hh:mm tt'
 $dtpTime.ShowUpDown = $true
-$dtpTime.Location = New-Object System.Drawing.Point(120, 98)
-$dtpTime.Size = New-Object System.Drawing.Size(120, 22)
+$dtpTime.Location = New-Object System.Drawing.Point(205, 98)
+$dtpTime.Size = New-Object System.Drawing.Size(95, 22)
 $dtpTime.Value = $initialTime
 $form.Controls.Add($dtpTime)
 
+$rbEvery2 = New-Object System.Windows.Forms.RadioButton
+$rbEvery2.Text = 'Every 2 minutes'
+$rbEvery2.Location = New-Object System.Drawing.Point(320, 98)
+$rbEvery2.Size = New-Object System.Drawing.Size(140, 24)
+$rbEvery2.Checked = ($initialMode -eq 'Every2Minutes')
+$form.Controls.Add($rbEvery2)
+
+# Enable/disable time picker based on selected mode
+$updateTimeEnabled = {
+    $dtpTime.Enabled = $rbDaily.Checked
+}
+$rbDaily.Add_CheckedChanged($updateTimeEnabled)
+$rbEvery2.Add_CheckedChanged($updateTimeEnabled)
+& $updateTimeEnabled
+
 # Status label
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Location = New-Object System.Drawing.Point(15, 200)
-$lblStatus.Size = New-Object System.Drawing.Size(520, 40)
+$lblStatus.Location = New-Object System.Drawing.Point(15, 250)
+$lblStatus.Size = New-Object System.Drawing.Size(520, 60)
 $lblStatus.ForeColor = [System.Drawing.Color]::DarkBlue
 $lblStatus.Text = ''
 $form.Controls.Add($lblStatus)
@@ -127,21 +153,38 @@ function Validate-Inputs {
 }
 
 function Save-Config {
-    $runTime = $dtpTime.Value.ToString('HH:mm')
+    $runTime    = $dtpTime.Value.ToString('HH:mm')
+    $runDisplay = $dtpTime.Value.ToString('hh:mm tt')
+    $mode       = if ($rbEvery2.Checked) { 'Every2Minutes' } else { 'Daily' }
     $cfg = [PSCustomObject]@{
-        source      = $txtSource.Text
-        destination = $txtDest.Text
-        runTime     = $runTime
+        source       = $txtSource.Text
+        destination  = $txtDest.Text
+        runTime      = $runTime
+        scheduleMode = $mode
     }
     $cfg | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
-    return $runTime
+    return [PSCustomObject]@{ RunTime = $runTime; RunDisplay = $runDisplay; Mode = $mode }
 }
 
 function Register-WinCopyTask {
-    param([string]$RunTime)
+    param(
+        [string]$RunTime,
+        [string]$Mode
+    )
 
-    # Trigger: daily at the given HH:mm
-    $trigger = New-ScheduledTaskTrigger -Daily -At $RunTime
+    if ($Mode -eq 'Every2Minutes') {
+        # Trigger: starts (about) now, repeats every 2 minutes "indefinitely".
+        # Task Scheduler requires a finite RepetitionDuration, so use a long span.
+        $startAt   = (Get-Date).AddMinutes(1)
+        $trigger   = New-ScheduledTaskTrigger -Once -At $startAt `
+                        -RepetitionInterval (New-TimeSpan -Minutes 2) `
+                        -RepetitionDuration (New-TimeSpan -Days 3650)
+        $description = 'WinCopy: folder copy job, every 2 minutes'
+    } else {
+        # Trigger: daily at the given HH:mm
+        $trigger     = New-ScheduledTaskTrigger -Daily -At $RunTime
+        $description = 'WinCopy: daily folder copy job'
+    }
 
     # Action: run PowerShell with the run script
     $psExe = (Get-Command powershell.exe).Source
@@ -159,22 +202,26 @@ function Register-WinCopyTask {
         -Trigger $trigger `
         -Action $action `
         -Settings $settings `
-        -Description 'WinCopy: daily folder copy job' `
+        -Description $description `
         -RunLevel Limited | Out-Null
 }
 
 # Save & Schedule button
 $btnSave = New-Object System.Windows.Forms.Button
 $btnSave.Text = 'Save && Schedule'
-$btnSave.Location = New-Object System.Drawing.Point(15, 150)
+$btnSave.Location = New-Object System.Drawing.Point(15, 200)
 $btnSave.Size = New-Object System.Drawing.Size(160, 32)
 $btnSave.Add_Click({
     if (-not (Validate-Inputs)) { return }
     try {
-        $runTime = Save-Config
-        Register-WinCopyTask -RunTime $runTime
+        $saved = Save-Config
+        Register-WinCopyTask -RunTime $saved.RunTime -Mode $saved.Mode
         $lblStatus.ForeColor = [System.Drawing.Color]::DarkGreen
-        $lblStatus.Text = "Scheduled daily at $runTime. Task name: $TaskName"
+        if ($saved.Mode -eq 'Every2Minutes') {
+            $lblStatus.Text = "Scheduled to run every 2 minutes. Task name: $TaskName"
+        } else {
+            $lblStatus.Text = "Scheduled daily at $($saved.RunDisplay). Task name: $TaskName"
+        }
     } catch {
         $lblStatus.ForeColor = [System.Drawing.Color]::Red
         $lblStatus.Text = "Failed to schedule: $($_.Exception.Message)"
@@ -185,7 +232,7 @@ $form.Controls.Add($btnSave)
 # Run Now button
 $btnRun = New-Object System.Windows.Forms.Button
 $btnRun.Text = 'Run Now'
-$btnRun.Location = New-Object System.Drawing.Point(185, 150)
+$btnRun.Location = New-Object System.Drawing.Point(185, 200)
 $btnRun.Size = New-Object System.Drawing.Size(100, 32)
 $btnRun.Add_Click({
     if (-not (Validate-Inputs)) { return }
@@ -215,7 +262,7 @@ $form.Controls.Add($btnRun)
 # Open Log button
 $btnLog = New-Object System.Windows.Forms.Button
 $btnLog.Text = 'Open Log'
-$btnLog.Location = New-Object System.Drawing.Point(295, 150)
+$btnLog.Location = New-Object System.Drawing.Point(295, 200)
 $btnLog.Size = New-Object System.Drawing.Size(100, 32)
 $btnLog.Add_Click({
     $logPath = Join-Path $ScriptDir 'winCopy.log'
@@ -231,7 +278,7 @@ $form.Controls.Add($btnLog)
 # Close button
 $btnClose = New-Object System.Windows.Forms.Button
 $btnClose.Text = 'Close'
-$btnClose.Location = New-Object System.Drawing.Point(435, 150)
+$btnClose.Location = New-Object System.Drawing.Point(435, 200)
 $btnClose.Size = New-Object System.Drawing.Size(100, 32)
 $btnClose.Add_Click({ $form.Close() })
 $form.Controls.Add($btnClose)
