@@ -14,6 +14,7 @@ companion scripts.
 | `WinCopy.exe` | The whole app. Double-click to open the GUI. `WinCopy.exe -Run` performs a headless copy (invoked by Task Scheduler). |
 | `WinCopy.ps1` | Source script. Same code as the exe; can also be run directly during development. |
 | `Build-WinCopy.ps1` | Build script that compiles `WinCopy.ps1` into `WinCopy.exe` via [PS2EXE](https://github.com/MScholtes/PS2EXE). |
+| `wincopy.ico` | App icon embedded in the exe. Automatically used by `Build-WinCopy.ps1` when present. |
 
 Runtime state (config + log) lives under **`%LOCALAPPDATA%\WinCopy\`**, not
 next to the exe — see [Where files live](#where-files-live) for details.
@@ -89,13 +90,12 @@ delete the `%LOCALAPPDATA%\WinCopy\` folder. The exe can stay where it is.
 
 ## Behavior
 
-- **Copy method:** Windows built-in **`robocopy`** (`/E`, with default
+- **Copy method:** Windows built-in **`robocopy`** (`/MIR`, with default
   incremental compare). On each run only files that are new or modified
   relative to the destination (by size + last-write time) are copied;
   unchanged files are skipped. Subdirectories — including empty ones — are
-  preserved. **No deletes:** files that exist in the destination but no
-  longer in the source are left alone (we do **not** pass `/MIR` or
-  `/PURGE`).
+  preserved. **Mirror mode:** files and folders that no longer exist in the
+  source are deleted from the destination, keeping it an exact mirror.
 - **Schedule:** Windows Task Scheduler, either daily at the chosen time or at
   the chosen repeating interval (1–60 Minutes or 1–60 Hours), task name
   `WinCopyDailyJob`. Re-saving overwrites the task. The task action is
@@ -128,12 +128,11 @@ From PowerShell, on a Windows machine:
 powershell -ExecutionPolicy Bypass -File .\Build-WinCopy.ps1
 ```
 
-This installs the `ps2exe` module into the current user's scope (if it's not
-already installed) and produces `WinCopy.exe` next to the script. Optional
-flags:
+`wincopy.ico` (included in the repo) is picked up automatically — no extra
+flags needed. Optional overrides:
 
 ```powershell
-.\Build-WinCopy.ps1 -IconFile .\wincopy.ico -Version 1.0.0.0
+.\Build-WinCopy.ps1 -IconFile .\my-custom.ico -Version 1.0.0.0
 ```
 
 > SmartScreen may warn the first time `WinCopy.exe` is run because the binary
@@ -169,6 +168,6 @@ Or open Task Scheduler GUI and delete `WinCopyDailyJob`.
   task (mapped network drives only work if mounted at task run time).
 - For very large folders, the current implementation already uses
   `robocopy` (built into Windows) so only changed files are copied each run.
-  If you ever need to also mirror deletes from source to destination, you
-  could add `/MIR` to the robocopy invocation in `Invoke-WinCopyRun` —
-  intentionally not enabled here so the destination never loses files.
+  `/MIR` is used, so the destination is kept as an exact mirror of the
+  source — files deleted from the source will also be removed from the
+  destination on the next run.

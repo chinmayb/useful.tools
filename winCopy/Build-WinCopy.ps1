@@ -32,6 +32,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Source    = Join-Path $ScriptDir 'WinCopy.ps1'
 $Output    = Join-Path $ScriptDir 'WinCopy.exe'
 
+# Default to wincopy.ico next to this script when -IconFile is not supplied
+if (-not $IconFile) {
+    $defaultIco = Join-Path $ScriptDir 'wincopy.ico'
+    if (Test-Path $defaultIco) { $IconFile = $defaultIco }
+}
+
 if (-not (Test-Path $Source)) {
     throw "Cannot find WinCopy.ps1 next to this build script ($Source)."
 }

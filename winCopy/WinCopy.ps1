@@ -159,11 +159,12 @@ function Invoke-WinCopyRun {
         # robocopy is shipped with Windows (Vista+). By default it copies only
         # files that are new or modified relative to the destination (compares
         # size + last-write time), which is exactly the incremental behavior
-        # we want. We do NOT pass /MIR or /PURGE, so extra files at the
-        # destination are left alone.
+        # we want. /MIR mirrors the source exactly: new/modified files are
+        # copied and files no longer in the source are deleted from the
+        # destination (orphan cleanup).
         #
         # Flags:
-        #   /E    - include all subdirectories, including empty ones
+        #   /MIR  - mirror source to destination (includes /E + purges orphans)
         #   /R:2  - retry 2 times on a failed file (default is 1 million)
         #   /W:2  - wait 2 seconds between retries
         #   /NFL  - suppress the per-file list (we only want the summary)
@@ -173,7 +174,7 @@ function Invoke-WinCopyRun {
         #   /NJH  - suppress job header (keep job summary for parsing)
         $roboArgs = @(
             $sourceFull, $destFull,
-            '/E', '/R:2', '/W:2',
+            '/MIR', '/R:2', '/W:2',
             '/NFL', '/NDL', '/NC', '/NP', '/NJH'
         )
 
@@ -503,15 +504,14 @@ function Register-WinCopyTask {
     $action   = Get-TaskAction
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden
 
-    try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
-
     Register-ScheduledTask `
         -TaskName $TaskName `
         -Trigger $trigger `
         -Action $action `
         -Settings $settings `
         -Description $description `
-        -RunLevel Limited | Out-Null
+        -RunLevel Limited `
+        -Force | Out-Null
 }
 
 function Get-WinCopyTaskInfo {
