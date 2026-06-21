@@ -51,9 +51,43 @@ if ($HostExePath -and ([System.IO.Path]::GetFileName($HostExePath) -notmatch '^(
 }
 
 $ScriptDir  = Split-Path -Parent $SelfPath
-$ConfigPath = Join-Path $ScriptDir 'winCopy-config.json'
-$LogPath    = Join-Path $ScriptDir 'winCopy.log'
 $TaskName   = 'WinCopyDailyJob'
+
+# Store config + log under %LOCALAPPDATA%\WinCopy\ so the exe itself can live
+# anywhere - including UAC-protected folders like C:\ or C:\Program Files -
+# without needing administrator rights to write its own state next to it.
+$DataDir = $null
+if ($env:LOCALAPPDATA) {
+    $DataDir = Join-Path $env:LOCALAPPDATA 'WinCopy'
+} else {
+    # Fallback for the (unusual) case where LOCALAPPDATA isn't set.
+    $DataDir = $ScriptDir
+}
+try {
+    if (-not (Test-Path $DataDir)) {
+        New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+    }
+} catch {
+    # If we can't create LOCALAPPDATA\WinCopy for any reason, fall back to
+    # the exe's own directory. Writes there may still fail in protected
+    # locations, but the rest of the code already handles that gracefully.
+    $DataDir = $ScriptDir
+}
+
+$ConfigPath = Join-Path $DataDir 'winCopy-config.json'
+$LogPath    = Join-Path $DataDir 'winCopy.log'
+
+# One-time migration: if an older config/log exists next to the exe (from
+# pre-LOCALAPPDATA builds), move it into the new data dir so the user
+# doesn't lose their schedule.
+$legacyConfig = Join-Path $ScriptDir 'winCopy-config.json'
+$legacyLog    = Join-Path $ScriptDir 'winCopy.log'
+if ((Test-Path $legacyConfig) -and -not (Test-Path $ConfigPath)) {
+    try { Move-Item -Path $legacyConfig -Destination $ConfigPath -Force } catch { }
+}
+if ((Test-Path $legacyLog) -and -not (Test-Path $LogPath)) {
+    try { Move-Item -Path $legacyLog -Destination $LogPath -Force } catch { }
+}
 
 # ===========================================================================
 # RUN MODE - headless copy (invoked by Task Scheduler or "Run Now")
@@ -94,9 +128,13 @@ function Invoke-WinCopyRun {
     $ErrorActionPreference = 'Stop'
     try {
         if (-not (Test-Path $ConfigPath)) {
-            Add-LogLine "FAIL no-config path=$ConfigPath"
+            # No config means nothing has been scheduled yet (e.g. the exe
+            # was just copied to a new location). Don't treat that as a
+            # failure - just record a one-line note and exit cleanly so the
+            # scheduled task doesn't show repeated red errors.
+            Add-LogLine "skip no-config path=$ConfigPath"
             Flush-Log
-            return 1
+            return 0
         }
 
         $config      = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
@@ -228,6 +266,7 @@ $initialTime          = [DateTime]::Today.AddHours(22)  # default 22:00
 $initialMode          = 'Daily'                          # 'Daily' or 'Interval'
 $initialIntervalValue = 2
 $initialIntervalUnit  = 'Minutes'
+$configLoaded         = $false
 if (Test-Path $ConfigPath) {
     try {
         $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
@@ -254,6 +293,7 @@ if (Test-Path $ConfigPath) {
         if ($cfg.intervalUnit -and ($IntervalUnits -contains $cfg.intervalUnit)) {
             $initialIntervalUnit = $cfg.intervalUnit
         }
+        $configLoaded = $true
     } catch { }
 }
 if (-not ($IntervalValues -contains $initialIntervalValue)) {
@@ -378,7 +418,11 @@ $lblStatus = New-Object System.Windows.Forms.Label
 $lblStatus.Location = New-Object System.Drawing.Point(15, 280)
 $lblStatus.Size = New-Object System.Drawing.Size(580, 60)
 $lblStatus.ForeColor = [System.Drawing.Color]::DarkBlue
-$lblStatus.Text = ''
+if ($configLoaded) {
+    $lblStatus.Text = "Loaded settings from $ConfigPath"
+} else {
+    $lblStatus.Text = "No config yet. Fill in folders + schedule and click 'Save & Schedule' to start. Settings will be saved to: $ConfigPath"
+}
 $form.Controls.Add($lblStatus)
 
 # Helpers

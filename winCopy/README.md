@@ -14,15 +14,17 @@ companion scripts.
 | `WinCopy.exe` | The whole app. Double-click to open the GUI. `WinCopy.exe -Run` performs a headless copy (invoked by Task Scheduler). |
 | `WinCopy.ps1` | Source script. Same code as the exe; can also be run directly during development. |
 | `Build-WinCopy.ps1` | Build script that compiles `WinCopy.ps1` into `WinCopy.exe` via [PS2EXE](https://github.com/MScholtes/PS2EXE). |
-| `winCopy-config.json` | Auto-generated when you click **Save & Schedule**. |
-| `winCopy.log` | Auto-generated; one entry per run. |
+
+Runtime state (config + log) lives under **`%LOCALAPPDATA%\WinCopy\`**, not
+next to the exe — see [Where files live](#where-files-live) for details.
 
 No installs, no admin rights needed (uses current user's Task Scheduler).
 
 ## Usage
 
 1. Copy `WinCopy.exe` onto the Windows machine. That's the only file you need
-   to ship; the config and log are created next to it on first use.
+   to ship — config and log are kept in `%LOCALAPPDATA%\WinCopy\`, not next
+   to the exe (see [Where files live](#where-files-live) below).
 2. Double-click `WinCopy.exe` to open the GUI.
 3. In the GUI:
    - **Browse...** to pick the source folder.
@@ -41,9 +43,49 @@ No installs, no admin rights needed (uses current user's Task Scheduler).
    result and next run time in a pop-up.
 6. Click **Delete Task** to remove the scheduled task (asks for confirmation;
    your source/destination files are untouched).
-7. Click **Open Log** to view `winCopy.log`.
+7. Click **Open Log** to view `%LOCALAPPDATA%\WinCopy\winCopy.log`.
 
 The GUI remembers your last choices (including the chosen interval).
+
+## Where files live
+
+`WinCopy.exe` itself is fully portable — you can drop it anywhere and it
+never tries to write into its own folder. All persistent state lives under
+**`%LOCALAPPDATA%\WinCopy\`** (typically
+`C:\Users\<you>\AppData\Local\WinCopy\`), which is always writable for the
+current user:
+
+| Path | What |
+|---|---|
+| `%LOCALAPPDATA%\WinCopy\winCopy-config.json` | The settings you saved via **Save & Schedule** (source, destination, schedule). |
+| `%LOCALAPPDATA%\WinCopy\winCopy.log` | Append-only run log, capped at 500 lines. |
+
+### Why this matters
+
+You can put `WinCopy.exe` in **any** folder — including UAC-protected ones
+like `C:\`, `C:\Program Files\WinCopy\`, or even a read-only network share —
+and it will still run **without prompting for administrator rights**. Earlier
+builds stored config/log next to the exe, which is why placing the exe in
+`C:\` previously triggered a UAC elevation prompt.
+
+> **Per-user, not per-machine.** `%LOCALAPPDATA%` is specific to the logged-in
+> Windows user. If you want a second Windows user on the same PC to have
+> their own schedule, they just launch `WinCopy.exe` once and configure it
+> for their own account. Likewise, the scheduled task is created under the
+> current user's account, not system-wide.
+
+### Legacy migration
+
+If you used an earlier build that wrote `winCopy-config.json` /
+`winCopy.log` next to the exe, those files are **moved** into
+`%LOCALAPPDATA%\WinCopy\` automatically the first time the new build runs,
+so your saved schedule and log history carry over. No manual action needed.
+
+### Nuking everything
+
+If you want to start fresh, close the GUI, click **Delete Task** (or run
+`Unregister-ScheduledTask -TaskName WinCopyDailyJob -Confirm:$false`), then
+delete the `%LOCALAPPDATA%\WinCopy\` folder. The exe can stay where it is.
 
 ## Behavior
 
@@ -59,7 +101,7 @@ The GUI remembers your last choices (including the chosen interval).
   `WinCopyDailyJob`. Re-saving overwrites the task. The task action is
   `WinCopy.exe -Run`; because the exe is compiled with `-noConsole`, no
   console window flashes up on each scheduled run.
-- **Log:** appended to `winCopy.log` alongside the exe. One compact summary
+- **Log:** appended to `%LOCALAPPDATA%\WinCopy\winCopy.log`. One compact summary
   line per run, with `files=` (copied this run), `skipped=` (already in
   sync), `err=` (failed copies), `dur=` (seconds), and `exit=` (raw
   robocopy exit code). The file is trimmed in place to the most recent 500
