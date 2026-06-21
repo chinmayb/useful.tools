@@ -68,7 +68,12 @@ function Add-LogLine {
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $line = "[$timestamp] $Message"
     [void]$script:LogBuffer.Add($line)
-    Write-Host $line
+    # When compiled with PS2EXE -noConsole, Write-Host output is displayed in
+    # a MessageBox popup at the end of the run. Avoid that by only echoing
+    # to the host when running the raw .ps1 (i.e. there is a real console).
+    if (-not $IsCompiledExe) {
+        Write-Host $line
+    }
 }
 
 function Flush-Log {
@@ -133,8 +138,33 @@ function Invoke-WinCopyRun {
             '/E', '/R:2', '/W:2',
             '/NFL', '/NDL', '/NC', '/NP', '/NJH'
         )
-        $roboOutput = & robocopy @roboArgs 2>&1
-        $roboExit   = $LASTEXITCODE
+
+        # Quote each argument that contains whitespace before joining.
+        $quotedArgs = $roboArgs | ForEach-Object {
+            if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+        }
+        $argString = [string]::Join(' ', $quotedArgs)
+
+        # Launch robocopy through System.Diagnostics.Process so we can pin
+        # CreateNoWindow=$true. Calling `& robocopy` from a PS2EXE -noConsole
+        # exe can briefly flash a console window; this approach never does.
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName               = 'robocopy.exe'
+        $psi.Arguments              = $argString
+        $psi.UseShellExecute        = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError  = $true
+        $psi.CreateNoWindow         = $true
+        $psi.WindowStyle            = [System.Diagnostics.ProcessWindowStyle]::Hidden
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $stdout = $proc.StandardOutput.ReadToEnd()
+        $stderr = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+        $roboExit   = $proc.ExitCode
+        $roboOutput = @()
+        if ($stdout) { $roboOutput += $stdout -split "`r?`n" }
+        if ($stderr) { $roboOutput += $stderr -split "`r?`n" }
 
         # Parse robocopy's summary block. The "Files :" line looks like:
         #   Files :   Total   Copied   Skipped  Mismatch  FAILED   Extras
